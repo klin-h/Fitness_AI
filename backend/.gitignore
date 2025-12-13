@@ -1,0 +1,27 @@
+# 环境变量文件
+.env
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+
+# 虚拟环境
+venv/
+env/
+ENV/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# 数据文件（可选，根据需求决定是否忽略）
+# users.json
+# tokens.json
+# sessions.json
+# plans.json
+
