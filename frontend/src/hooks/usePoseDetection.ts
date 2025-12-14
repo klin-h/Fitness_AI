@@ -1,4 +1,7 @@
 import { useEffect, useRef, useState, useCallback } from 'react';
+import { Pose, Results, POSE_CONNECTIONS } from '@mediapipe/pose';
+import { Camera } from '@mediapipe/camera_utils';
+import { drawConnectors, drawLandmarks } from '@mediapipe/drawing_utils';
 
 export interface PoseResults {
   poseLandmarks?: any;
