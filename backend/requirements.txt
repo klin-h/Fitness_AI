@@ -7,4 +7,7 @@ tensorflow==2.13.0
 scipy==1.10.1
 pandas==2.0.3
 requests==2.31.0
-python-dotenv==1.0.0 
+python-dotenv==1.0.0
+flask-sqlalchemy
+psycopg2-binary
+gunicorn 
