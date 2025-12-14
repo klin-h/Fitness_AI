@@ -1,8 +1,3 @@
-console.log('Environment Check:', {
-  NODE_ENV: process.env.NODE_ENV,
-  REACT_APP_API_URL: process.env.REACT_APP_API_URL
-});
-
 const API_BASE_URL = process.env.REACT_APP_API_URL || 'http://localhost:8000';
 
 export const api = {
