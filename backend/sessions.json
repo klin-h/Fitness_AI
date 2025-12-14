@@ -55,5 +55,52 @@
       }
     ],
     "status": "completed"
+  },
+  "yxw_20251214_165419": {
+    "session_id": "yxw_20251214_165419",
+    "user_id": "yxw",
+    "exercise_type": "squat",
+    "start_time": "2025-12-14T16:54:19.986486",
+    "end_time": "2025-12-14T16:54:46.004662",
+    "total_count": 5,
+    "correct_count": 5,
+    "scores": [
+      {
+        "timestamp": "2025-12-14T16:54:24.757854",
+        "score": 10,
+        "is_correct": true,
+        "feedback": "很好！已完成 1 次",
+        "pose_data": null
+      },
+      {
+        "timestamp": "2025-12-14T16:54:29.435620",
+        "score": 20,
+        "is_correct": true,
+        "feedback": "很好！已完成 2 次",
+        "pose_data": null
+      },
+      {
+        "timestamp": "2025-12-14T16:54:35.012102",
+        "score": 30,
+        "is_correct": true,
+        "feedback": "很好！已完成 3 次",
+        "pose_data": null
+      },
+      {
+        "timestamp": "2025-12-14T16:54:39.436946",
+        "score": 40,
+        "is_correct": true,
+        "feedback": "很好！已完成 4 次",
+        "pose_data": null
+      },
+      {
+        "timestamp": "2025-12-14T16:54:45.010595",
+        "score": 50,
+        "is_correct": true,
+        "feedback": "很好！已完成 5 次",
+        "pose_data": null
+      }
+    ],
+    "status": "completed"
   }
 }

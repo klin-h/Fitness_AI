@@ -9,6 +9,7 @@ from functools import wraps
 import math
 import requests
 from dotenv import load_dotenv
+from models import db, User, Plan, Session, Token
 
 # 加载环境变量
 load_dotenv()
@@ -16,116 +17,39 @@ load_dotenv()
 app = Flask(__name__)
 CORS(app)  # 允许跨域请求
 
+# 数据库配置
+app.config['SQLALCHEMY_DATABASE_URI'] = os.getenv('DATABASE_URL')
+app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
+db.init_app(app)
+
+# 在应用启动时自动创建表
+with app.app_context():
+    db.create_all()
+
 # 数据存储（生产环境中应使用数据库）
 exercise_data = {}
 
-# 数据文件路径
-USERS_FILE = 'users.json'
-TOKENS_FILE = 'tokens.json'
-SESSIONS_FILE = 'sessions.json'
-PLANS_FILE = 'plans.json'
-
-# 初始化用户数据文件
-def init_users_file():
-    """初始化用户数据文件"""
-    if not os.path.exists(USERS_FILE):
-        with open(USERS_FILE, 'w', encoding='utf-8') as f:
-            json.dump({}, f, ensure_ascii=False, indent=2)
-
-def init_tokens_file():
-    """初始化token文件"""
-    if not os.path.exists(TOKENS_FILE):
-        with open(TOKENS_FILE, 'w', encoding='utf-8') as f:
-            json.dump({}, f, ensure_ascii=False, indent=2)
-
-def load_users():
-    """加载用户数据"""
-    init_users_file()
-    try:
-        with open(USERS_FILE, 'r', encoding='utf-8') as f:
-            return json.load(f)
-    except:
-        return {}
-
-def save_users(users):
-    """保存用户数据"""
-    with open(USERS_FILE, 'w', encoding='utf-8') as f:
-        json.dump(users, f, ensure_ascii=False, indent=2)
-
-def load_tokens():
-    """加载token数据"""
-    init_tokens_file()
-    try:
-        with open(TOKENS_FILE, 'r', encoding='utf-8') as f:
-            return json.load(f)
-    except:
-        return {}
-
-def save_tokens(tokens):
-    """保存token数据"""
-    with open(TOKENS_FILE, 'w', encoding='utf-8') as f:
-        json.dump(tokens, f, ensure_ascii=False, indent=2)
-
-def init_sessions_file():
-    """初始化会话数据文件"""
-    if not os.path.exists(SESSIONS_FILE):
-        with open(SESSIONS_FILE, 'w', encoding='utf-8') as f:
-            json.dump({}, f, ensure_ascii=False, indent=2)
-
-def load_sessions():
-    """加载会话数据"""
-    init_sessions_file()
-    try:
-        with open(SESSIONS_FILE, 'r', encoding='utf-8') as f:
-            return json.load(f)
-    except:
-        return {}
-
-def save_sessions(sessions):
-    """保存会话数据"""
-    with open(SESSIONS_FILE, 'w', encoding='utf-8') as f:
-        json.dump(sessions, f, ensure_ascii=False, indent=2)
-
-def init_plans_file():
-    """初始化健身计划数据文件"""
-    if not os.path.exists(PLANS_FILE):
-        with open(PLANS_FILE, 'w', encoding='utf-8') as f:
-            json.dump({}, f, ensure_ascii=False, indent=2)
-
-def load_plans():
-    """加载健身计划数据"""
-    init_plans_file()
-    try:
-        with open(PLANS_FILE, 'r', encoding='utf-8') as f:
-            return json.load(f)
-    except:
-        return {}
-
-def save_plans(plans):
-    """保存健身计划数据"""
-    with open(PLANS_FILE, 'w', encoding='utf-8') as f:
-        json.dump(plans, f, ensure_ascii=False, indent=2)
-
-# 从文件加载会话数据（必须在函数定义之后）
-user_sessions = load_sessions()
-
+# 辅助函数：密码哈希
 def hash_password(password):
     """密码哈希"""
     return hashlib.sha256(password.encode()).hexdigest()
 
+# 辅助函数：生成token
 def generate_token():
     """生成token"""
     return secrets.token_urlsafe(32)
 
-def verify_token(token):
+# 辅助函数：验证token
+def verify_token(token_str):
     """验证token"""
-    tokens = load_tokens()
-    if token in tokens:
-        token_data = tokens[token]
-        # 检查token是否过期（24小时）
-        expire_time = datetime.fromisoformat(token_data['expire_time'])
-        if datetime.now() < expire_time:
-            return token_data['user_id']
+    token_record = Token.query.get(token_str)
+    if token_record:
+        if datetime.now() < token_record.expire_time:
+            return token_record.user_id
+        else:
+            # 过期删除
+            db.session.delete(token_record)
+            db.session.commit()
     return None
 
 def require_auth(f):
@@ -201,13 +125,6 @@ def get_exercises():
 def start_session():
     """
     开始新的锻炼会话
-    
-    Request Body:
-        - exercise_type: 运动类型
-        - user_id: 用户ID（可选）
-    
-    Returns:
-        JSON: 会话ID和初始数据
     """
     data = request.get_json()
     exercise_type = data.get('exercise_type', 'squat')
@@ -215,20 +132,16 @@ def start_session():
     
     session_id = f"{user_id}_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
     
-    user_sessions[session_id] = {
-        "session_id": session_id,
-        "user_id": user_id,
-        "exercise_type": exercise_type,
-        "start_time": datetime.now().isoformat(),
-        "end_time": None,
-        "total_count": 0,
-        "correct_count": 0,
-        "scores": [],
-        "status": "active"
-    }
-    
-    # 保存到文件
-    save_sessions(user_sessions)
+    new_session = Session(
+        session_id=session_id,
+        user_id=user_id,
+        exercise_type=exercise_type,
+        start_time=datetime.now(),
+        status="active",
+        scores=[]
+    )
+    db.session.add(new_session)
+    db.session.commit()
     
     return jsonify({
         "session_id": session_id,
@@ -239,20 +152,9 @@ def start_session():
 def submit_exercise_data(session_id):
     """
     提交运动数据
-    
-    Path Parameters:
-        - session_id: 会话ID
-    
-    Request Body:
-        - pose_data: 姿态关键点数据
-        - is_correct: 动作是否正确
-        - score: 动作得分
-        - feedback: 反馈信息
-    
-    Returns:
-        JSON: 处理结果
     """
-    if session_id not in user_sessions:
+    session = Session.query.get(session_id)
+    if not session:
         return jsonify({"error": "Session not found"}), 404
     
     data = request.get_json()
@@ -261,29 +163,33 @@ def submit_exercise_data(session_id):
     score = data.get('score', 0)
     feedback = data.get('feedback', '')
     
-    session = user_sessions[session_id]
-    session['total_count'] += 1
-    
+    session.total_count += 1
     if is_correct:
-        session['correct_count'] += 1
+        session.correct_count += 1
     
-    session['scores'].append({
+    # 更新scores JSONB字段
+    # 注意：需要创建一个新列表以触发SQLAlchemy的变更检测，或者使用flag_modified
+    new_score = {
         "timestamp": datetime.now().isoformat(),
         "score": score,
         "is_correct": is_correct,
         "feedback": feedback,
-        "pose_data": pose_data  # 实际项目中可能需要压缩或存储到文件
-    })
+        "pose_data": pose_data
+    }
     
-    # 保存到文件
-    save_sessions(user_sessions)
+    # 复制现有列表并添加新项
+    current_scores = list(session.scores) if session.scores else []
+    current_scores.append(new_score)
+    session.scores = current_scores
+    
+    db.session.commit()
     
     return jsonify({
         "message": "Data submitted successfully",
         "session_stats": {
-            "total_count": session['total_count'],
-            "correct_count": session['correct_count'],
-            "accuracy": session['correct_count'] / session['total_count'] if session['total_count'] > 0 else 0
+            "total_count": session.total_count,
+            "correct_count": session.correct_count,
+            "accuracy": session.correct_count / session.total_count if session.total_count > 0 else 0
         }
     })
 
@@ -291,28 +197,23 @@ def submit_exercise_data(session_id):
 def end_session(session_id):
     """
     结束锻炼会话
-    
-    Path Parameters:
-        - session_id: 会话ID
-    
-    Returns:
-        JSON: 会话总结数据
     """
-    if session_id not in user_sessions:
+    session = Session.query.get(session_id)
+    if not session:
         return jsonify({"error": "Session not found"}), 404
     
-    session = user_sessions[session_id]
-    session['end_time'] = datetime.now().isoformat()
-    session['status'] = 'completed'
+    session.end_time = datetime.now()
+    session.status = 'completed'
     
-    # 计算会话统计
-    total_count = session['total_count']
-    correct_count = session['correct_count']
+    # 计算统计数据
+    total_count = session.total_count
+    correct_count = session.correct_count
     accuracy = correct_count / total_count if total_count > 0 else 0
-    avg_score = sum([s['score'] for s in session['scores']]) / len(session['scores']) if session['scores'] else 0
     
-    # 保存到文件
-    save_sessions(user_sessions)
+    scores_list = session.scores if session.scores else []
+    avg_score = sum([s['score'] for s in scores_list]) / len(scores_list) if scores_list else 0
+    
+    db.session.commit()
     
     return jsonify({
         "session_id": session_id,
@@ -321,8 +222,8 @@ def end_session(session_id):
             "correct_count": correct_count,
             "accuracy": accuracy,
             "average_score": avg_score,
-            "duration": session['end_time'],  # 实际应该是结束时间 - 开始时间
-            "exercise_type": session['exercise_type']
+            "duration": session.end_time.isoformat(),
+            "exercise_type": session.exercise_type
         },
         "message": "Session ended successfully"
     })
@@ -331,33 +232,21 @@ def end_session(session_id):
 def get_user_history(user_id):
     """
     获取用户历史记录
-    
-    Path Parameters:
-        - user_id: 用户ID
-    
-    Query Parameters:
-        - limit: 返回记录数量限制（默认10）
-        - exercise_type: 过滤特定运动类型
-    
-    Returns:
-        JSON: 用户历史会话列表
     """
     limit = request.args.get('limit', 10, type=int)
     exercise_type = request.args.get('exercise_type')
     
-    user_sessions_list = []
-    for session_id, session in user_sessions.items():
-        if session['user_id'] == user_id:
-            if exercise_type is None or session['exercise_type'] == exercise_type:
-                user_sessions_list.append(session)
+    query = Session.query.filter_by(user_id=user_id)
+    if exercise_type:
+        query = query.filter_by(exercise_type=exercise_type)
     
-    # 按开始时间排序，最新的在前
-    user_sessions_list.sort(key=lambda x: x['start_time'], reverse=True)
+    # 按开始时间倒序
+    sessions = query.order_by(Session.start_time.desc()).limit(limit).all()
     
     return jsonify({
         "user_id": user_id,
-        "sessions": user_sessions_list[:limit],
-        "total_sessions": len(user_sessions_list)
+        "sessions": [s.to_dict() for s in sessions],
+        "total_sessions": query.count() # 注意：这里count是总数，不是limit后的数量
     })
 
 @app.route('/api/analytics/pose', methods=['POST'])
@@ -436,15 +325,6 @@ def get_recommendations():
 def register():
     """
     用户注册
-    
-    Request Body:
-        - username: 用户名
-        - password: 密码
-        - email: 邮箱（可选）
-        - nickname: 昵称（可选）
-    
-    Returns:
-        JSON: 注册结果和token
     """
     data = request.get_json()
     username = data.get('username')
@@ -458,45 +338,46 @@ def register():
     if len(password) < 6:
         return jsonify({"error": "密码长度至少6位"}), 400
     
-    users = load_users()
-    
-    if username in users:
+    # 检查用户是否存在
+    if User.query.get(username):
         return jsonify({"error": "用户名已存在"}), 400
     
     # 创建新用户
-    user_id = username
-    users[user_id] = {
-        "user_id": user_id,
-        "username": username,
-        "password_hash": hash_password(password),
-        "email": email,
-        "nickname": nickname,
-        "created_at": datetime.now().isoformat(),
-        "avatar": "",  # 头像URL
-        "profile": {
+    new_user = User(
+        user_id=username,
+        username=username,
+        password_hash=hash_password(password),
+        email=email,
+        nickname=nickname,
+        created_at=datetime.now(),
+        avatar="",
+        profile={
             "height": 0,
             "weight": 0,
             "age": 0,
             "gender": ""
         }
-    }
-    save_users(users)
+    )
+    db.session.add(new_user)
+    db.session.commit()
     
     # 生成token
-    token = generate_token()
-    tokens = load_tokens()
-    expire_time = datetime.now() + timedelta(days=1)  # 24小时后过期
-    tokens[token] = {
-        "user_id": user_id,
-        "expire_time": expire_time.isoformat()
-    }
-    save_tokens(tokens)
+    token_str = generate_token()
+    expire_time = datetime.now() + timedelta(days=1)
+    
+    new_token = Token(
+        token=token_str,
+        user_id=username,
+        expire_time=expire_time
+    )
+    db.session.add(new_token)
+    db.session.commit()
     
     return jsonify({
         "message": "注册成功",
-        "token": token,
+        "token": token_str,
         "user": {
-            "user_id": user_id,
+            "user_id": username,
             "username": username,
             "nickname": nickname,
             "email": email
@@ -507,13 +388,6 @@ def register():
 def login():
     """
     用户登录
-    
-    Request Body:
-        - username: 用户名
-        - password: 密码
-    
-    Returns:
-        JSON: 登录结果和token
     """
     data = request.get_json()
     username = data.get('username')
@@ -522,35 +396,31 @@ def login():
     if not username or not password:
         return jsonify({"error": "用户名和密码不能为空"}), 400
     
-    users = load_users()
+    user = User.query.get(username)
     
-    if username not in users:
-        return jsonify({"error": "用户名或密码错误"}), 401
-    
-    user = users[username]
-    password_hash = hash_password(password)
-    
-    if user['password_hash'] != password_hash:
+    if not user or user.password_hash != hash_password(password):
         return jsonify({"error": "用户名或密码错误"}), 401
     
     # 生成token
-    token = generate_token()
-    tokens = load_tokens()
-    expire_time = datetime.now() + timedelta(days=1)  # 24小时后过期
-    tokens[token] = {
-        "user_id": username,
-        "expire_time": expire_time.isoformat()
-    }
-    save_tokens(tokens)
+    token_str = generate_token()
+    expire_time = datetime.now() + timedelta(days=1)
+    
+    new_token = Token(
+        token=token_str,
+        user_id=username,
+        expire_time=expire_time
+    )
+    db.session.add(new_token)
+    db.session.commit()
     
     return jsonify({
         "message": "登录成功",
-        "token": token,
+        "token": token_str,
         "user": {
-            "user_id": user['user_id'],
-            "username": user['username'],
-            "nickname": user['nickname'],
-            "email": user['email']
+            "user_id": user.user_id,
+            "username": user.username,
+            "nickname": user.nickname,
+            "email": user.email
         }
     })
 
@@ -559,40 +429,18 @@ def login():
 def get_current_user():
     """
     获取当前用户信息（需要认证）
-    
-    Headers:
-        - Authorization: Bearer {token}
-    
-    Returns:
-        JSON: 用户信息
     """
-    users = load_users()
-    user_id = request.user_id
-    
-    if user_id not in users:
+    user = User.query.get(request.user_id)
+    if not user:
         return jsonify({"error": "用户不存在"}), 404
     
-    user = users[user_id].copy()
-    # 移除敏感信息
-    user.pop('password_hash', None)
-    
-    return jsonify(user)
+    return jsonify(user.to_dict())
 
 @app.route('/api/auth/change-password', methods=['POST'])
 @require_auth
 def change_password():
     """
     修改密码（需要认证）
-    
-    Headers:
-        - Authorization: Bearer {token}
-    
-    Request Body:
-        - old_password: 旧密码
-        - new_password: 新密码
-    
-    Returns:
-        JSON: 修改结果
     """
     data = request.get_json()
     old_password = data.get('old_password')
@@ -604,21 +452,17 @@ def change_password():
     if len(new_password) < 6:
         return jsonify({"error": "新密码长度至少6位"}), 400
     
-    users = load_users()
-    user_id = request.user_id
-    
-    if user_id not in users:
+    user = User.query.get(request.user_id)
+    if not user:
         return jsonify({"error": "用户不存在"}), 404
     
-    user = users[user_id]
-    
     # 验证旧密码
-    if user['password_hash'] != hash_password(old_password):
+    if user.password_hash != hash_password(old_password):
         return jsonify({"error": "旧密码错误"}), 401
     
     # 更新密码
-    user['password_hash'] = hash_password(new_password)
-    save_users(users)
+    user.password_hash = hash_password(new_password)
+    db.session.commit()
     
     return jsonify({"message": "密码修改成功"})
 
@@ -627,92 +471,52 @@ def change_password():
 def get_user_profile():
     """
     获取用户个人资料（需要认证）
-    
-    Headers:
-        - Authorization: Bearer {token}
-    
-    Returns:
-        JSON: 用户个人资料
     """
-    users = load_users()
-    user_id = request.user_id
-    
-    if user_id not in users:
+    user = User.query.get(request.user_id)
+    if not user:
         return jsonify({"error": "用户不存在"}), 404
     
-    user = users[user_id].copy()
-    user.pop('password_hash', None)
-    
-    return jsonify(user)
+    return jsonify(user.to_dict())
 
 @app.route('/api/user/profile', methods=['PUT'])
 @require_auth
 def update_user_profile():
     """
     更新用户个人资料（需要认证）
-    
-    Headers:
-        - Authorization: Bearer {token}
-    
-    Request Body:
-        - nickname: 昵称（可选）
-        - email: 邮箱（可选）
-        - avatar: 头像URL（可选）
-        - profile: 个人资料对象（可选）
-            - height: 身高（可选）
-            - weight: 体重（可选）
-            - age: 年龄（可选）
-            - gender: 性别（可选）
-    
-    Returns:
-        JSON: 更新后的用户信息
     """
     data = request.get_json()
-    users = load_users()
-    user_id = request.user_id
+    user = User.query.get(request.user_id)
     
-    if user_id not in users:
+    if not user:
         return jsonify({"error": "用户不存在"}), 404
-    
-    user = users[user_id]
     
     # 更新允许修改的字段
     if 'nickname' in data:
-        user['nickname'] = data['nickname']
+        user.nickname = data['nickname']
     if 'email' in data:
-        user['email'] = data['email']
+        user.email = data['email']
     if 'avatar' in data:
-        user['avatar'] = data['avatar']
+        user.avatar = data['avatar']
     if 'profile' in data:
-        if 'profile' not in user:
-            user['profile'] = {}
-        user['profile'].update(data['profile'])
+        # 更新JSONB字段
+        current_profile = dict(user.profile) if user.profile else {}
+        current_profile.update(data['profile'])
+        user.profile = current_profile
     
-    save_users(users)
+    db.session.commit()
     
-    # 返回更新后的用户信息（移除敏感信息）
-    updated_user = user.copy()
-    updated_user.pop('password_hash', None)
-    
-    return jsonify(updated_user)
+    return jsonify(user.to_dict())
 
 @app.route('/api/user/plan', methods=['GET'])
 @require_auth
 def get_user_plan():
     """
     获取用户的健身计划（需要认证）
-    
-    Headers:
-        - Authorization: Bearer {token}
-    
-    Returns:
-        JSON: 用户的健身计划
     """
-    plans = load_plans()
-    user_id = request.user_id
+    plan = Plan.query.filter_by(user_id=request.user_id).first()
     
-    if user_id in plans:
-        return jsonify(plans[user_id])
+    if plan:
+        return jsonify(plan.to_dict())
     else:
         # 返回默认计划
         default_plan = {
@@ -736,53 +540,35 @@ def get_user_plan():
 def update_user_plan():
     """
     更新用户的健身计划（需要认证）
-    
-    Headers:
-        - Authorization: Bearer {token}
-    
-    Request Body:
-        - daily_goals: 每日目标（可选）
-            - squat: 深蹲次数
-            - pushup: 俯卧撑次数
-            - plank: 平板支撑秒数
-            - jumping_jack: 开合跳次数
-        - weekly_goals: 每周目标（可选）
-            - total_sessions: 总运动次数
-            - total_duration: 总运动时长（分钟）
-    
-    Returns:
-        JSON: 更新后的健身计划
     """
     data = request.get_json()
-    plans = load_plans()
-    user_id = request.user_id
+    plan = Plan.query.filter_by(user_id=request.user_id).first()
     
-    if user_id not in plans:
-        plans[user_id] = {
-            "daily_goals": {},
-            "weekly_goals": {},
-            "created_at": datetime.now().isoformat()
-        }
-    
-    plan = plans[user_id]
+    if not plan:
+        plan = Plan(
+            user_id=request.user_id,
+            daily_goals={},
+            weekly_goals={},
+            created_at=datetime.now()
+        )
+        db.session.add(plan)
     
     # 更新每日目标
     if 'daily_goals' in data:
-        if 'daily_goals' not in plan:
-            plan['daily_goals'] = {}
-        plan['daily_goals'].update(data['daily_goals'])
+        current_daily = dict(plan.daily_goals) if plan.daily_goals else {}
+        current_daily.update(data['daily_goals'])
+        plan.daily_goals = current_daily
     
     # 更新每周目标
     if 'weekly_goals' in data:
-        if 'weekly_goals' not in plan:
-            plan['weekly_goals'] = {}
-        plan['weekly_goals'].update(data['weekly_goals'])
+        current_weekly = dict(plan.weekly_goals) if plan.weekly_goals else {}
+        current_weekly.update(data['weekly_goals'])
+        plan.weekly_goals = current_weekly
     
-    plan['updated_at'] = datetime.now().isoformat()
+    plan.updated_at = datetime.now()
+    db.session.commit()
     
-    save_plans(plans)
-    
-    return jsonify(plan)
+    return jsonify(plan.to_dict())
 
 def calculate_bmi(height_cm, weight_kg):
     """计算BMI指数"""
@@ -1239,34 +1025,14 @@ def ai_generate_fitness_plan(height, weight, age, gender):
 def generate_ai_plan():
     """
     AI Agent: 根据用户生命体征生成个性化健身计划建议（需要认证）
-    
-    Headers:
-        - Authorization: Bearer {token}
-    
-    Request Body:
-        - height: 身高（cm，可选，从用户资料获取）
-        - weight: 体重（kg，可选，从用户资料获取）
-        - age: 年龄（可选，从用户资料获取）
-        - gender: 性别（可选，从用户资料获取）
-    
-    Returns:
-        JSON: AI生成的健身计划建议
-            - daily_goals: 每日目标
-            - weekly_goals: 每周目标
-            - suggestions: 建议说明
-            - bmi: BMI指数
-            - fitness_level: 健身水平
-            - reasoning: 生成理由
     """
     data = request.get_json() or {}
-    users = load_users()
-    user_id = request.user_id
+    user = User.query.get(request.user_id)
     
-    if user_id not in users:
+    if not user:
         return jsonify({"error": "用户不存在"}), 404
     
-    user = users[user_id]
-    profile = user.get('profile', {})
+    profile = user.profile or {}
     
     # 优先使用请求中的数据，否则从用户资料中获取
     height = data.get('height') or profile.get('height')
