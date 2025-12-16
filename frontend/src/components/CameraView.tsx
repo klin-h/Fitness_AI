@@ -13,19 +13,19 @@ interface CameraViewProps {
 }
 
 const CameraView: React.FC<CameraViewProps> = ({
-  videoRef,
-  canvasRef,
-  isActive,
-  exerciseStats,
-  startDetection,
-  stopDetection,
-  resetStats
+    videoRef,
+    canvasRef,
+    isActive,
+    exerciseStats,
+    startDetection,
+    stopDetection,
+    resetStats
 }) => {
 
   return (
     <div className="relative w-full max-w-4xl mx-auto">
       {/* 摄像头视频 */}
-      <div className="relative camera-frame overflow-hidden">
+      <div className="relative camera-frame overflow-hidden rounded-lg">
         <video
           ref={videoRef}
           className="w-full h-auto"
@@ -38,10 +38,13 @@ const CameraView: React.FC<CameraViewProps> = ({
         {/* 姿态检测画布叠加层 */}
         <canvas
           ref={canvasRef}
-          className="pose-overlay"
-          width={640}
-          height={480}
-          style={{ transform: 'scaleX(-1)' }}
+          className="absolute top-0 left-0 pointer-events-none"
+          style={{ 
+            transform: 'scaleX(-1)',
+            width: '100%',
+            height: '100%',
+            objectFit: 'cover'
+          }}
         />
         
         {/* 状态指示器 */}

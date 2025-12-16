@@ -151,7 +151,7 @@ def activate_and_install(python_cmd):
             pip_cmd_abs = str(Path(pip_cmd).resolve())
             print_colored(f"使用 pip: {pip_cmd_abs}", 'cyan')
             subprocess.run([pip_cmd_abs, 'install', '-q', '-r', 'requirements.txt'], 
-                           check=True)
+                   check=True)
     except FileNotFoundError as e:
         print_colored(f"错误: 找不到文件", 'red')
         print_colored(f"当前目录: {os.getcwd()}", 'yellow')

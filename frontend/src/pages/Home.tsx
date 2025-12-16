@@ -39,7 +39,7 @@ function Home() {
     startDetection,
     stopDetection,
     resetStats
-  } = usePoseDetection();
+  } = usePoseDetection(selectedExercise);
 
   // 包装 startDetection 以添加会话创建
   const handleStartDetection = async () => {
@@ -86,7 +86,6 @@ function Home() {
   // 当运动计数增加时，更新会话数据
   useEffect(() => {
     if (sessionId && token && isActive && exerciseStats.count > previousCountRef.current) {
-      const countDiff = exerciseStats.count - previousCountRef.current;
       previousCountRef.current = exerciseStats.count;
       
       // 提交每次计数增加的数据
@@ -301,8 +300,8 @@ function Home() {
                   let targetValue = 0;
                   
                   if (isPlank) {
-                    // 平板支撑：显示时长（秒）
-                    currentValue = duration; // 当前运动时长（秒）
+                    // 平板支撑：显示时长（秒），从分析器获取
+                    currentValue = exerciseStats.duration || 0; // 从姿态分析器获取的时长（秒）
                     if (userPlan?.daily_goals?.plank) {
                       targetValue = userPlan.daily_goals.plank; // 目标秒数
                     } else {
