@@ -39,7 +39,7 @@ function Home() {
     startDetection,
     stopDetection,
     resetStats
-  } = usePoseDetection();
+  } = usePoseDetection(selectedExercise);
 
   // 包装 startDetection 以添加会话创建
   const handleStartDetection = async () => {

@@ -10,12 +10,17 @@ import math
 import requests
 from dotenv import load_dotenv
 from models import db, User, Plan, Session, Token
+from pose_analyzer import create_analyzer
 
 # 加载环境变量
 load_dotenv()
 
 app = Flask(__name__)
 CORS(app)  # 允许跨域请求
+
+# 存储活跃的分析器实例，用于保持状态（如计数）
+# Key: f"{user_id}_{exercise_type}", Value: PoseAnalyzer instance
+active_analyzers = {}
 
 # 数据库配置
 app.config['SQLALCHEMY_DATABASE_URI'] = os.getenv('DATABASE_URL')
@@ -252,7 +257,7 @@ def get_user_history(user_id):
 @app.route('/api/analytics/pose', methods=['POST'])
 def analyze_pose():
     """
-    分析姿态数据（占位符接口）
+    分析姿态数据
     
     Request Body:
         - pose_landmarks: MediaPipe姿态关键点数据
@@ -260,34 +265,39 @@ def analyze_pose():
     
     Returns:
         JSON: 分析结果
-    
-    注意：这个接口需要实现具体的姿态分析算法
     """
     data = request.get_json()
     pose_landmarks = data.get('pose_landmarks')
     exercise_type = data.get('exercise_type', 'squat')
     
-    # TODO: 实现具体的姿态分析逻辑
-    # 这里应该包含：
-    # 1. 关键点角度计算
-    # 2. 动作标准性判断
-    # 3. 错误检测和反馈生成
-    # 4. 计数逻辑
+    if not pose_landmarks:
+        return jsonify({"error": "缺少姿态关键点数据"}), 400
+
+    # 获取用户标识（优先使用认证用户ID，否则使用IP）
+    # 注意：如果未经过 require_auth 装饰器，request.user_id 可能不存在
+    user_id = getattr(request, 'user_id', request.remote_addr)
     
-    # 模拟分析结果
-    analysis_result = {
-        "is_correct": True,  # 动作是否正确
-        "score": 85,  # 动作得分 (0-100)
-        "feedback": "动作标准，继续保持！",
-        "suggestions": [],  # 改进建议
-        "key_points": {  # 关键点分析
-            "knee_angle": 90,
-            "hip_angle": 85,
-            "back_straight": True
-        }
-    }
+    # 获取或创建分析器实例
+    # 使用 user_id 和 exercise_type 作为键，确保每个用户的每种运动都有独立的状态
+    analyzer_key = f"{user_id}_{exercise_type}"
     
-    return jsonify(analysis_result)
+    # 如果分析器不存在，创建新的
+    if analyzer_key not in active_analyzers:
+        # 简单的内存管理：清理该用户的其他分析器，假设用户同一时间只做一个运动
+        keys_to_remove = [k for k in active_analyzers.keys() if k.startswith(f"{user_id}_")]
+        for k in keys_to_remove:
+            del active_analyzers[k]
+            
+        active_analyzers[analyzer_key] = create_analyzer(exercise_type)
+    
+    analyzer = active_analyzers[analyzer_key]
+    
+    # 执行分析
+    try:
+        result = analyzer.analyze(pose_landmarks)
+        return jsonify(result)
+    except Exception as e:
+        return jsonify({"error": f"分析过程出错: {str(e)}"}), 500
 
 @app.route('/api/recommendations', methods=['GET'])
 def get_recommendations():

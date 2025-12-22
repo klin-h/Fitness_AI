@@ -2,6 +2,7 @@ import { useEffect, useRef, useState, useCallback } from 'react';
 import { Pose, Results, POSE_CONNECTIONS } from '@mediapipe/pose';
 import { Camera } from '@mediapipe/camera_utils';
 import { drawConnectors, drawLandmarks } from '@mediapipe/drawing_utils';
+import { api } from '../services/api';
 
 export interface PoseResults {
   poseLandmarks?: any;
@@ -15,7 +16,7 @@ export interface ExerciseStats {
   score: number;
 }
 
-export const usePoseDetection = () => {
+export const usePoseDetection = (exerciseType: string = 'squat') => {
   const videoRef = useRef<HTMLVideoElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const poseRef = useRef<Pose | null>(null);
@@ -33,19 +34,11 @@ export const usePoseDetection = () => {
 
   // 动作状态追踪
   const stateRef = useRef({
-    isSquatting: false,
-    lastFeedbackTime: 0
+    lastRequestTime: 0,
+    isProcessing: false
   });
 
-  // 计算角度辅助函数
-  const calculateAngle = (a: any, b: any, c: any) => {
-    const radians = Math.atan2(c.y - b.y, c.x - b.x) - Math.atan2(a.y - b.y, a.x - b.x);
-    let angle = Math.abs(radians * 180.0 / Math.PI);
-    if (angle > 180.0) angle = 360 - angle;
-    return angle;
-  };
-
-  const onResults = useCallback((results: Results) => {
+  const onResults = useCallback(async (results: Results) => {
     if (!canvasRef.current || !videoRef.current) return;
 
     const canvasCtx = canvasRef.current.getContext('2d');
@@ -65,53 +58,40 @@ export const usePoseDetection = () => {
       drawLandmarks(canvasCtx, results.poseLandmarks,
                     {color: '#FF0000', lineWidth: 2});
       
-      // 简单的深蹲计数逻辑
-      const landmarks = results.poseLandmarks;
-      
-      // 获取左腿关键点 (23: 左髋, 25: 左膝, 27: 左踝)
-      const leftHip = landmarks[23];
-      const leftKnee = landmarks[25];
-      const leftAnkle = landmarks[27];
+      // 发送数据到后端进行分析
+      // 限制请求频率：每100ms发送一次，且等待上一次请求完成
+      const now = Date.now();
+      if (now - stateRef.current.lastRequestTime > 100 && !stateRef.current.isProcessing) {
+        stateRef.current.isProcessing = true;
+        stateRef.current.lastRequestTime = now;
 
-      // 获取右腿关键点 (24: 右髋, 26: 右膝, 28: 右踝)
-      const rightHip = landmarks[24];
-      const rightKnee = landmarks[26];
-      const rightAnkle = landmarks[28];
+        try {
+          // 转换关键点数据格式以匹配后端期望
+          // MediaPipe JS 返回的是 NormalizedLandmarkList
+          const landmarks = results.poseLandmarks;
+          
+          const response = await api.post('/api/analytics/pose', {
+            pose_landmarks: landmarks,
+            exercise_type: exerciseType
+          });
 
-      if (leftHip && leftKnee && leftAnkle && rightHip && rightKnee && rightAnkle) {
-        const leftAngle = calculateAngle(leftHip, leftKnee, leftAnkle);
-        const rightAngle = calculateAngle(rightHip, rightKnee, rightAnkle);
-        const avgAngle = (leftAngle + rightAngle) / 2;
-
-        // 深蹲判定逻辑
-        // 站立状态: 角度 > 160
-        // 下蹲状态: 角度 < 100
-        
-        if (avgAngle < 100) {
-          if (!stateRef.current.isSquatting) {
-            stateRef.current.isSquatting = true;
+          if (response && !response.error) {
             setExerciseStats(prev => ({
-              ...prev,
-              feedback: '保持住，姿势不错！',
-              isCorrect: true
+              count: response.count !== undefined ? response.count : prev.count,
+              isCorrect: response.is_correct,
+              feedback: response.feedback || prev.feedback,
+              score: response.score || prev.score
             }));
           }
-        } else if (avgAngle > 160) {
-          if (stateRef.current.isSquatting) {
-            stateRef.current.isSquatting = false;
-            setExerciseStats(prev => ({
-              ...prev,
-              count: prev.count + 1,
-              score: prev.score + 10,
-              feedback: `完成！当前个数: ${prev.count + 1}`,
-              isCorrect: true
-            }));
-          }
+        } catch (error) {
+          console.error('Pose analysis error:', error);
+        } finally {
+          stateRef.current.isProcessing = false;
         }
       }
     }
     canvasCtx.restore();
-  }, []);
+  }, [exerciseType]);
 
   // 初始化姿态检测
   const initializePose = useCallback(async () => {
@@ -180,7 +160,7 @@ export const usePoseDetection = () => {
       feedback: '准备开始运动',
       score: 0
     });
-    stateRef.current.isSquatting = false;
+    // 重置后端状态可能需要一个新的API，或者依赖后端的超时清理
   };
 
   return {
