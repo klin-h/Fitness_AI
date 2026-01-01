@@ -2,7 +2,9 @@ import React, { useState, useEffect } from 'react';
 import { useAuth } from '../contexts/AuthContext';
 import { useNavigate, useSearchParams } from 'react-router-dom';
 import { api } from '../services/api';
-import { User, Lock, Mail, UserCircle, Save, LogOut, ArrowLeft, Edit2, History, Target, Sparkles } from 'lucide-react';
+import { User, Lock, Mail, UserCircle, Save, LogOut, ArrowLeft, Edit2, History, Target, Sparkles, Trophy, TrendingUp } from 'lucide-react';
+import AchievementsTab from './AchievementsTab';
+import LeaderboardTab from './LeaderboardTab';
 
 const Profile: React.FC = () => {
   const { user, token, logout, updateUser } = useAuth();
@@ -10,9 +12,9 @@ const Profile: React.FC = () => {
   const [searchParams] = useSearchParams();
   
   // 从URL参数获取初始标签页
-  const tabFromUrl = searchParams.get('tab') as 'profile' | 'password' | 'history' | 'plan' | null;
-  const [activeTab, setActiveTab] = useState<'profile' | 'password' | 'history' | 'plan'>(
-    tabFromUrl && ['profile', 'password', 'history', 'plan'].includes(tabFromUrl) ? tabFromUrl : 'profile'
+  const tabFromUrl = searchParams.get('tab') as 'profile' | 'password' | 'history' | 'plan' | 'achievements' | 'leaderboard' | null;
+  const [activeTab, setActiveTab] = useState<'profile' | 'password' | 'history' | 'plan' | 'achievements' | 'leaderboard'>(
+    tabFromUrl && ['profile', 'password', 'history', 'plan', 'achievements', 'leaderboard'].includes(tabFromUrl) ? tabFromUrl : 'profile'
   );
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
@@ -54,8 +56,8 @@ const Profile: React.FC = () => {
 
   // 监听URL参数变化
   useEffect(() => {
-    const tabFromUrl = searchParams.get('tab') as 'profile' | 'password' | 'history' | 'plan' | null;
-    if (tabFromUrl && ['profile', 'password', 'history', 'plan'].includes(tabFromUrl)) {
+    const tabFromUrl = searchParams.get('tab') as 'profile' | 'password' | 'history' | 'plan' | 'achievements' | 'leaderboard' | null;
+    if (tabFromUrl && ['profile', 'password', 'history', 'plan', 'achievements', 'leaderboard'].includes(tabFromUrl)) {
       setActiveTab(tabFromUrl);
     }
   }, [searchParams]);
@@ -387,6 +389,30 @@ const Profile: React.FC = () => {
               <Target className="inline h-5 w-5 mr-2" />
               健身计划
             </button>
+            <button
+              onClick={() => setActiveTab('achievements')}
+              data-tab="achievements"
+              className={`px-6 py-3 font-semibold transition-all rounded-t-lg ${
+                activeTab === 'achievements'
+                  ? 'text-blue-600 bg-blue-50 border-b-2 border-blue-600'
+                  : 'text-gray-600 hover:text-blue-600 hover:bg-gray-50'
+              }`}
+            >
+              <Trophy className="inline h-5 w-5 mr-2" />
+              成就徽章
+            </button>
+            <button
+              onClick={() => setActiveTab('leaderboard')}
+              data-tab="leaderboard"
+              className={`px-6 py-3 font-semibold transition-all rounded-t-lg ${
+                activeTab === 'leaderboard'
+                  ? 'text-blue-600 bg-blue-50 border-b-2 border-blue-600'
+                  : 'text-gray-600 hover:text-blue-600 hover:bg-gray-50'
+              }`}
+            >
+              <TrendingUp className="inline h-5 w-5 mr-2" />
+              排行榜
+            </button>
           </div>
 
           {/* 错误和成功提示 */}
@@ -638,8 +664,10 @@ const Profile: React.FC = () => {
                     const duration = endTime 
                       ? Math.floor((endTime.getTime() - startTime.getTime()) / 1000)
                       : null;
+                    // 确保准确率不超过100%，并且correct_count不超过total_count
+                    const correctCount = Math.min(record.correct_count || 0, record.total_count || 0);
                     const accuracy = record.total_count > 0 
-                      ? ((record.correct_count / record.total_count) * 100).toFixed(1)
+                      ? Math.min(100, (correctCount / record.total_count) * 100).toFixed(1)
                       : '0';
                     
                     const exerciseNames: { [key: string]: string } = {
@@ -843,6 +871,16 @@ const Profile: React.FC = () => {
                 )}
               </button>
             </form>
+          )}
+
+          {/* 成就徽章标签页 */}
+          {activeTab === 'achievements' && (
+            <AchievementsTab token={token || null} />
+          )}
+
+          {/* 排行榜标签页 */}
+          {activeTab === 'leaderboard' && (
+            <LeaderboardTab />
           )}
         </div>
       </main>

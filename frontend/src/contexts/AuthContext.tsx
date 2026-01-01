@@ -63,6 +63,10 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
         localStorage.removeItem('user');
         setToken(null);
         setUser(null);
+        // 如果不在登录页，重定向到登录页
+        if (window.location.pathname !== '/login' && window.location.pathname !== '/register') {
+          window.location.href = '/login';
+        }
       }
     } catch (error) {
       console.error('获取用户信息失败:', error);
@@ -70,6 +74,10 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
       localStorage.removeItem('user');
       setToken(null);
       setUser(null);
+      // 如果不在登录页，重定向到登录页
+      if (window.location.pathname !== '/login' && window.location.pathname !== '/register') {
+        window.location.href = '/login';
+      }
     }
   };
 

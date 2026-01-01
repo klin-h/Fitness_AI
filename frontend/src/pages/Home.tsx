@@ -4,7 +4,7 @@ import CameraView from '../components/CameraView';
 import StatsPanel from '../components/StatsPanel';
 import ExerciseSelector from '../components/ExerciseSelector';
 import { usePoseDetection } from '../hooks/usePoseDetection';
-import { Activity, User, LogOut } from 'lucide-react';
+import { Activity, User, LogOut, Calendar, Target, Trophy } from 'lucide-react';
 import { useAuth } from '../contexts/AuthContext';
 import { api } from '../services/api';
 
@@ -16,6 +16,11 @@ function Home() {
   const { user, token, logout } = useAuth();
   const navigate = useNavigate();
   const previousCountRef = useRef(0);
+  
+  // 打卡相关
+  const [checkinStreak, setCheckinStreak] = useState(0);
+  const [dailyChallenge, setDailyChallenge] = useState<any>(null);
+  const [challengeCompleted, setChallengeCompleted] = useState(false);
   
   // 用户健身计划
   const [userPlan, setUserPlan] = useState<{
@@ -77,6 +82,22 @@ function Home() {
           token
         );
         setSessionId(null);
+        
+        // 自动打卡
+        try {
+          await api.post('/api/checkin', {}, token);
+          const checkin = await api.get('/api/user/checkin/streak', token);
+          setCheckinStreak(checkin.current_streak || 0);
+        } catch (err) {
+          console.error('自动打卡失败:', err);
+        }
+        
+        // 检查成就
+        try {
+          await api.post('/api/user/achievements/check', {}, token);
+        } catch (err) {
+          console.error('检查成就失败:', err);
+        }
       } catch (err) {
         console.error('结束运动会话失败:', err);
       }
@@ -139,13 +160,95 @@ function Home() {
       try {
         const plan = await api.get('/api/user/plan', token);
         setUserPlan(plan);
-      } catch (err) {
-        console.error('加载健身计划失败:', err);
+      } catch (err: any) {
+        // 401错误会被api.ts自动处理（重定向到登录页）
+        if (err.message && !err.message.includes('无效或过期的token')) {
+          console.error('加载健身计划失败:', err);
+        }
       }
     };
 
     loadUserPlan();
   }, [user, token]);
+
+  // 加载打卡数据
+  useEffect(() => {
+    const loadCheckin = async () => {
+      if (!user || !token) return;
+      
+      try {
+        const checkin = await api.get('/api/user/checkin/streak', token);
+        setCheckinStreak(checkin.current_streak || 0);
+      } catch (err: any) {
+        if (err.message && !err.message.includes('无效或过期的token')) {
+          console.error('加载打卡数据失败:', err);
+        }
+      }
+    };
+
+    loadCheckin();
+  }, [user, token]);
+
+  // 加载每日挑战
+  useEffect(() => {
+    const loadChallenge = async () => {
+      if (!user || !token) return;
+      
+      try {
+        const challenge = await api.get('/api/challenges/daily', token);
+        setDailyChallenge(challenge);
+      } catch (err: any) {
+        if (err.message && !err.message.includes('无效或过期的token')) {
+          console.error('加载每日挑战失败:', err);
+        }
+      }
+    };
+
+    loadChallenge();
+  }, [user, token]);
+
+  // 打卡功能
+  const handleCheckin = async () => {
+    if (!token) return;
+    
+    try {
+      await api.post('/api/checkin', {}, token);
+      const checkin = await api.get('/api/user/checkin/streak', token);
+      setCheckinStreak(checkin.current_streak || 0);
+      // 检查成就
+      await api.post('/api/user/achievements/check', {}, token);
+    } catch (err) {
+      console.error('打卡失败:', err);
+    }
+  };
+
+  // 完成挑战
+  const handleCompleteChallenge = async () => {
+    if (!token || !dailyChallenge || challengeCompleted) return;
+    
+    try {
+      const response = await api.post(`/api/challenges/${dailyChallenge.id}/complete`, {}, token);
+      if (response.completed) {
+        setChallengeCompleted(true);
+        // 检查成就
+        const achievementsResponse = await api.post('/api/user/achievements/check', {}, token);
+        if (achievementsResponse.new_achievements && achievementsResponse.new_achievements.length > 0) {
+          // 显示成就解锁提示
+          const achievementNames = achievementsResponse.new_achievements.map((a: any) => `${a.icon} ${a.name}`).join('、');
+          alert(`🎉 恭喜！您解锁了新的成就：${achievementNames}`);
+        }
+      }
+    } catch (err: any) {
+      if (err.message && err.message.includes('挑战未完成')) {
+        // 显示友好的错误提示
+        const errorData = err.response?.data || {};
+        alert(errorData.message || '您还没有完成挑战目标，请继续努力！');
+      } else {
+        console.error('完成挑战失败:', err);
+        alert('完成挑战失败，请稍后重试');
+      }
+    }
+  };
 
   const getExerciseName = (id: string) => {
     const exerciseNames: { [key: string]: string } = {
@@ -281,8 +384,63 @@ function Home() {
                 >
                   健身计划定制
                 </button>
+                <button 
+                  className="w-full bg-green-600 hover:bg-green-700 text-white font-semibold py-3 px-4 rounded-lg transition-all duration-200 shadow-sm hover:shadow-md flex items-center justify-center gap-2"
+                  onClick={handleCheckin}
+                >
+                  <Calendar className="h-5 w-5" />
+                  打卡 ({checkinStreak}天)
+                </button>
               </div>
             </div>
+
+            {/* 每日挑战 */}
+            {dailyChallenge && (
+              <div className="bg-gradient-to-r from-purple-50 to-pink-50 rounded-xl p-6 shadow-md border border-purple-200">
+                <h3 className="text-xl font-bold text-gray-900 mb-4 flex items-center gap-2">
+                  <Target className="h-6 w-6 text-purple-600" />
+                  每日挑战
+                </h3>
+                <div className="space-y-3">
+                  <div>
+                    <h4 className="font-semibold text-gray-900">{dailyChallenge.name}</h4>
+                    <p className="text-sm text-gray-600 mt-1">{dailyChallenge.description}</p>
+                  </div>
+                  {dailyChallenge.type === 'count' && (
+                    <div className="text-sm text-gray-700">
+                      目标: {dailyChallenge.target} 次 {getExerciseName(dailyChallenge.exercise)}
+                    </div>
+                  )}
+                  {dailyChallenge.type === 'duration' && (
+                    <div className="text-sm text-gray-700">
+                      目标: {dailyChallenge.target} 秒 {getExerciseName(dailyChallenge.exercise)}
+                    </div>
+                  )}
+                  {dailyChallenge.type === 'combo' && dailyChallenge.targets && (
+                    <div className="text-sm text-gray-700 space-y-1">
+                      {Object.entries(dailyChallenge.targets).map(([ex, target]) => (
+                        <div key={ex}>{getExerciseName(ex)}: {target as number} 次</div>
+                      ))}
+                    </div>
+                  )}
+                  <div className="flex items-center gap-2 text-sm text-purple-600">
+                    <Trophy className="h-4 w-4" />
+                    完成挑战可获得成就奖励 🏆
+                  </div>
+                  <button
+                    onClick={handleCompleteChallenge}
+                    disabled={challengeCompleted}
+                    className={`w-full font-semibold py-2 px-4 rounded-lg transition-all duration-200 ${
+                      challengeCompleted
+                        ? 'bg-gray-300 text-gray-500 cursor-not-allowed'
+                        : 'bg-purple-600 hover:bg-purple-700 text-white shadow-sm hover:shadow-md'
+                    }`}
+                  >
+                    {challengeCompleted ? '✓ 已完成' : '完成挑战'}
+                  </button>
+                </div>
+              </div>
+            )}
 
             {/* 今日目标 */}
             <div className="bg-white rounded-xl p-6 shadow-md border border-blue-100">

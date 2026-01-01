@@ -1,7 +1,7 @@
 from flask import Flask, request, jsonify
 from flask_cors import CORS
 import json
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, date
 import os
 import hashlib
 import secrets
@@ -9,58 +9,131 @@ from functools import wraps
 import math
 import requests
 from dotenv import load_dotenv
-from models import db, User, Plan, Session, Token
-from pose_analyzer import create_analyzer
+import logging
+from sqlalchemy.exc import SQLAlchemyError, IntegrityError
+from utils import (
+    validate_email, validate_username, validate_password,
+    validate_height, validate_weight, validate_age,
+    sanitize_input, db_transaction, handle_db_error,
+    validate_exercise_type
+)
+
+# 配置日志
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+)
+logger = logging.getLogger(__name__)
 
 # 加载环境变量
 load_dotenv()
 
 app = Flask(__name__)
-CORS(app)  # 允许跨域请求
-
-# 存储活跃的分析器实例，用于保持状态（如计数）
-# Key: f"{user_id}_{exercise_type}", Value: PoseAnalyzer instance
-active_analyzers = {}
+# 配置 CORS，允许所有来源和所有方法（开发环境）
+CORS(app, resources={
+    r"/api/*": {
+        "origins": "*",
+        "methods": ["GET", "POST", "PUT", "DELETE", "OPTIONS"],
+        "allow_headers": ["Content-Type", "Authorization"]
+    }
+})
 
 # 数据库配置
-app.config['SQLALCHEMY_DATABASE_URI'] = os.getenv('DATABASE_URL')
+# 默认使用SQLite（本地开发），生产环境可使用PostgreSQL
+# SQLite: sqlite:///fitnessai.db
+# PostgreSQL: postgresql://用户名:密码@主机:端口/数据库名
+# 示例: postgresql://postgres:password@localhost:5432/fitnessai
+app.config['SQLALCHEMY_DATABASE_URI'] = os.getenv(
+    'DATABASE_URL', 
+    'sqlite:///fitnessai.db'  # 默认SQLite配置，适合本地开发
+)
 app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
+
+# SQLite不需要连接池配置，PostgreSQL需要
+database_url = os.getenv('DATABASE_URL', 'sqlite:///fitnessai.db')
+if 'postgresql' in database_url or 'postgres' in database_url:
+    app.config['SQLALCHEMY_ENGINE_OPTIONS'] = {
+        'pool_pre_ping': True,  # 自动重连
+        'pool_recycle': 300,    # 连接回收时间
+    }
+else:
+    # SQLite配置
+    app.config['SQLALCHEMY_ENGINE_OPTIONS'] = {
+        'connect_args': {'check_same_thread': False}  # SQLite需要这个参数
+    }
+
+# 初始化数据库
+from database import db, init_db, Session, User, UserProfile, Plan, UserAchievement, Checkin, ChallengeCompletion
 db.init_app(app)
 
-# 在应用启动时自动创建表
-with app.app_context():
-    db.create_all()
+# 导入数据库适配层
+from db_adapter import (
+    load_users, get_user_by_id, get_user_by_username, create_user, update_user,
+    load_tokens, save_token, delete_token, get_token,
+    load_plans, get_user_plan, save_user_plan,
+    load_sessions, get_session, create_session, update_session, get_user_sessions,
+    load_achievements, get_user_achievements, unlock_achievement,
+    get_user_checkin_stats, add_checkin, get_checkin_calendar,
+    get_challenge_completions, complete_challenge
+)
 
-# 数据存储（生产环境中应使用数据库）
+# 数据存储（已迁移到数据库）
 exercise_data = {}
 
-# 辅助函数：密码哈希
+# 数据库初始化（应用启动时）
+with app.app_context():
+    try:
+        # 确保数据库表存在
+        db.create_all()
+        print("✅ 数据库连接成功")
+        
+        # 检查是否需要迁移JSON数据（仅在首次运行时）
+        from database import User
+        user_count = User.query.count()
+        if user_count == 0:
+            print("📥 检测到空数据库，尝试迁移JSON数据...")
+            try:
+                from database import migrate_from_json
+                migrate_from_json(app)
+            except Exception as e:
+                print(f"⚠️  数据迁移失败（可能是首次运行）: {e}")
+        else:
+            print(f"✅ 数据库已包含 {user_count} 个用户")
+    except Exception as e:
+        print(f"❌ 数据库连接失败: {e}")
+        db_type = "PostgreSQL" if "postgresql" in app.config['SQLALCHEMY_DATABASE_URI'] or "postgres" in app.config['SQLALCHEMY_DATABASE_URI'] else "SQLite"
+        if db_type == "PostgreSQL":
+            print("💡 请确保PostgreSQL已安装并运行，且数据库已创建")
+            print("💡 可以使用以下命令创建数据库:")
+            print("   createdb -U postgres fitnessai")
+            print("💡 或修改.env文件中的DATABASE_URL配置")
+        else:
+            print("💡 SQLite数据库文件将自动创建在项目根目录")
+            print("💡 如需使用PostgreSQL，请在.env文件中设置DATABASE_URL")
+
 def hash_password(password):
     """密码哈希"""
     return hashlib.sha256(password.encode()).hexdigest()
 
-# 辅助函数：生成token
 def generate_token():
     """生成token"""
     return secrets.token_urlsafe(32)
 
-# 辅助函数：验证token
-def verify_token(token_str):
+def verify_token(token):
     """验证token"""
-    token_record = Token.query.get(token_str)
-    if token_record:
-        if datetime.now() < token_record.expire_time:
-            return token_record.user_id
-        else:
-            # 过期删除
-            db.session.delete(token_record)
-            db.session.commit()
+    token_obj = get_token(token)
+    if token_obj and datetime.now() < token_obj.expire_time:
+        return token_obj.user_id
     return None
 
 def require_auth(f):
     """认证装饰器"""
     @wraps(f)
     def decorated_function(*args, **kwargs):
+        # OPTIONS 预检请求不需要认证
+        if request.method == 'OPTIONS':
+            return jsonify({}), 200
+        
         token = request.headers.get('Authorization')
         if not token:
             return jsonify({"error": "未提供认证token"}), 401
@@ -130,134 +203,320 @@ def get_exercises():
 def start_session():
     """
     开始新的锻炼会话
+    
+    Request Body:
+        - exercise_type: 运动类型
+        - user_id: 用户ID（可选）
+    
+    Returns:
+        JSON: 会话ID和初始数据
     """
-    data = request.get_json()
-    exercise_type = data.get('exercise_type', 'squat')
-    user_id = data.get('user_id', 'anonymous')
-    
-    session_id = f"{user_id}_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
-    
-    new_session = Session(
-        session_id=session_id,
-        user_id=user_id,
-        exercise_type=exercise_type,
-        start_time=datetime.now(),
-        status="active",
-        scores=[]
-    )
-    db.session.add(new_session)
-    db.session.commit()
-    
-    return jsonify({
-        "session_id": session_id,
-        "message": "Session started successfully"
-    })
+    try:
+        data = request.get_json() or {}
+        exercise_type = data.get('exercise_type', 'squat')
+        user_id = data.get('user_id', 'anonymous')
+        
+        # 验证运动类型
+        if not validate_exercise_type(exercise_type):
+            return jsonify({"error": "无效的运动类型"}), 400
+        
+        session_id = f"{user_id}_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
+        
+        session_data = {
+            "session_id": session_id,
+            "user_id": user_id,
+            "exercise_type": exercise_type,
+            "start_time": datetime.now().isoformat(),
+            "total_count": 0,
+            "correct_count": 0,
+            "status": "active",
+            "scores": []
+        }
+        
+        logger.info(f"准备创建会话: {session_id}, user_id={user_id}, exercise_type={exercise_type}")
+        
+        # create_session 已经使用了 @db_transaction 装饰器，会自动处理事务
+        try:
+            session = create_session(session_data)
+            logger.info(f"✅ 创建运动会话成功: {session_id} - {user_id} - {exercise_type}")
+            
+            return jsonify({
+                "session_id": session_id,
+                "message": "Session started successfully"
+            })
+        except ValueError as e:
+            logger.error(f"❌ 创建会话失败（验证错误）: {str(e)}", exc_info=True)
+            return jsonify({"error": str(e)}), 400
+        except IntegrityError as e:
+            logger.error(f"❌ 创建会话失败（数据冲突）: {str(e)}", exc_info=True)
+            return jsonify({"error": "会话ID已存在，请稍后重试"}), 409
+        except Exception as e:
+            logger.error(f"❌ 创建会话失败: {str(e)}", exc_info=True)
+            import traceback
+            error_details = traceback.format_exc()
+            logger.error(f"详细错误堆栈:\n{error_details}")
+            return jsonify({
+                "error": "创建会话失败",
+                "message": str(e),
+                "details": error_details if app.debug else None
+            }), 500
+    except Exception as e:
+        logger.error(f"❌ 处理会话创建请求失败: {str(e)}", exc_info=True)
+        import traceback
+        error_details = traceback.format_exc()
+        logger.error(f"详细错误堆栈:\n{error_details}")
+        return jsonify({
+            "error": "服务器错误",
+            "message": str(e),
+            "details": error_details if app.debug else None
+        }), 500
 
 @app.route('/api/session/<session_id>/data', methods=['POST'])
 def submit_exercise_data(session_id):
     """
     提交运动数据
+    
+    Path Parameters:
+        - session_id: 会话ID
+    
+    Request Body:
+        - pose_data: 姿态关键点数据
+        - is_correct: 动作是否正确
+        - score: 动作得分
+        - feedback: 反馈信息
+    
+    Returns:
+        JSON: 处理结果
     """
-    session = Session.query.get(session_id)
-    if not session:
-        return jsonify({"error": "Session not found"}), 404
+    try:
+        # 获取当前会话对象
+        session_obj = Session.query.get(session_id)
+        if not session_obj:
+            logger.warning(f"会话不存在: {session_id}")
+            return jsonify({"error": "Session not found"}), 404
+        
+        data = request.get_json() or {}
+        is_correct = bool(data.get('is_correct', False))
+        
+        # 安全地转换 score，处理字符串和 None 的情况
+        try:
+            score_value = data.get('score', 0)
+            if isinstance(score_value, str):
+                score = max(0, min(100, int(float(score_value))))
+            elif score_value is None:
+                score = 0
+            else:
+                score = max(0, min(100, int(score_value)))
+        except (ValueError, TypeError) as e:
+            logger.warning(f"分数转换失败: {score_value}, 使用默认值 0, 错误: {e}")
+            score = 0
+        
+        feedback = sanitize_input(data.get('feedback', ''), max_length=500)
+        
+        # 对于平板支撑，不增加计数，而是使用时长
+        # 对于其他运动，增加计数
+        if session_obj.exercise_type != 'plank':
+            session_obj.total_count += 1
+            if is_correct:
+                session_obj.correct_count += 1
+            # 确保correct_count不超过total_count（防止数据异常）
+            if session_obj.correct_count > session_obj.total_count:
+                session_obj.correct_count = session_obj.total_count
+        # 平板支撑的时长会在 end_session 时通过 end_time - start_time 计算
     
-    data = request.get_json()
-    pose_data = data.get('pose_data')
-    is_correct = data.get('is_correct', False)
-    score = data.get('score', 0)
-    feedback = data.get('feedback', '')
-    
-    session.total_count += 1
-    if is_correct:
-        session.correct_count += 1
-    
-    # 更新scores JSONB字段
-    # 注意：需要创建一个新列表以触发SQLAlchemy的变更检测，或者使用flag_modified
-    new_score = {
-        "timestamp": datetime.now().isoformat(),
-        "score": score,
-        "is_correct": is_correct,
-        "feedback": feedback,
-        "pose_data": pose_data
-    }
-    
-    # 复制现有列表并添加新项
-    current_scores = list(session.scores) if session.scores else []
-    current_scores.append(new_score)
-    session.scores = current_scores
-    
-    db.session.commit()
-    
-    return jsonify({
-        "message": "Data submitted successfully",
-        "session_stats": {
-            "total_count": session.total_count,
-            "correct_count": session.correct_count,
-            "accuracy": session.correct_count / session.total_count if session.total_count > 0 else 0
-        }
-    })
+        # 更新分数记录 - 安全地处理 None 和空字符串
+        try:
+            if session_obj.scores and session_obj.scores.strip():
+                scores = json.loads(session_obj.scores)
+            else:
+                scores = []
+        except (json.JSONDecodeError, TypeError) as e:
+            logger.warning(f"解析分数记录失败: {e}, 使用空列表")
+            scores = []
+        
+        scores.append({
+            "timestamp": datetime.now().isoformat(),
+            "score": score,
+            "is_correct": is_correct,
+            "feedback": feedback
+        })
+        session_obj.scores = json.dumps(scores)
+        
+        try:
+            db.session.commit()
+            
+            # 对于平板支撑，计算当前时长
+            is_plank = session_obj.exercise_type == 'plank'
+            if is_plank:
+                duration_seconds = int((datetime.now() - session_obj.start_time).total_seconds())
+                logger.info(f"✅ 提交运动数据成功: {session_id}, duration={duration_seconds}秒, score={score}")
+                return jsonify({
+                    "message": "Data submitted successfully",
+                    "session_stats": {
+                        "duration": duration_seconds,  # 秒
+                        "duration_minutes": round(duration_seconds / 60, 1),  # 分钟
+                        "score": score,
+                        "is_correct": is_correct
+                    }
+                })
+            else:
+                logger.info(f"✅ 提交运动数据成功: {session_id}, count={session_obj.total_count}, score={score}")
+                # 确保准确率不超过100%
+                accuracy = round(min(100, (session_obj.correct_count / session_obj.total_count * 100) if session_obj.total_count > 0 else 0), 2)
+                return jsonify({
+                    "message": "Data submitted successfully",
+                    "session_stats": {
+                        "total_count": session_obj.total_count,
+                        "correct_count": session_obj.correct_count,
+                        "accuracy": accuracy
+                    }
+                })
+        except Exception as e:
+            logger.error(f"❌ 提交运动数据失败（数据库错误）: {str(e)}", exc_info=True)
+            db.session.rollback()
+            return jsonify({
+                "error": "提交数据失败",
+                "message": str(e)
+            }), 500
+            
+    except Exception as e:
+        logger.error(f"❌ 处理提交运动数据请求失败: {str(e)}", exc_info=True)
+        db.session.rollback()
+        import traceback
+        return jsonify({
+            "error": "服务器错误",
+            "message": str(e),
+            "details": traceback.format_exc() if app.debug else None
+        }), 500
 
 @app.route('/api/session/<session_id>/end', methods=['POST'])
 def end_session(session_id):
     """
     结束锻炼会话
+    
+    Path Parameters:
+        - session_id: 会话ID
+    
+    Returns:
+        JSON: 会话总结数据
     """
-    session = Session.query.get(session_id)
-    if not session:
-        return jsonify({"error": "Session not found"}), 404
-    
-    session.end_time = datetime.now()
-    session.status = 'completed'
-    
-    # 计算统计数据
-    total_count = session.total_count
-    correct_count = session.correct_count
-    accuracy = correct_count / total_count if total_count > 0 else 0
-    
-    scores_list = session.scores if session.scores else []
-    avg_score = sum([s['score'] for s in scores_list]) / len(scores_list) if scores_list else 0
-    
-    db.session.commit()
-    
-    return jsonify({
-        "session_id": session_id,
-        "summary": {
-            "total_count": total_count,
-            "correct_count": correct_count,
-            "accuracy": accuracy,
-            "average_score": avg_score,
-            "duration": session.end_time.isoformat(),
-            "exercise_type": session.exercise_type
-        },
-        "message": "Session ended successfully"
-    })
+    try:
+        session_obj = Session.query.get(session_id)
+        if not session_obj:
+            logger.warning(f"会话不存在: {session_id}")
+            return jsonify({"error": "Session not found"}), 404
+        
+        # 更新会话状态
+        session_obj.end_time = datetime.now()
+        session_obj.status = 'completed'
+        
+        # 计算时长
+        duration_seconds = (session_obj.end_time - session_obj.start_time).total_seconds()
+        duration_minutes = int(duration_seconds / 60)
+        
+        # 对于平板支撑，使用时长而不是次数
+        is_plank = session_obj.exercise_type == 'plank'
+        
+        if is_plank:
+            # 平板支撑：使用时长（秒）作为主要指标
+            total_count = int(duration_seconds)  # 秒数
+            correct_count = int(duration_seconds)  # 平板支撑没有"正确次数"的概念，使用总时长
+            accuracy = 100  # 平板支撑的准确率基于姿势质量，这里简化处理
+        else:
+            # 其他运动：使用次数
+            total_count = session_obj.total_count or 0
+            correct_count = session_obj.correct_count or 0
+            # 确保准确率不超过100%，并且correct_count不超过total_count
+            correct_count = min(correct_count, total_count)  # 防止correct_count超过total_count
+            accuracy = min(100, (correct_count / total_count * 100) if total_count > 0 else 0)
+        
+        # 安全地解析分数记录
+        try:
+            if session_obj.scores and session_obj.scores.strip():
+                scores = json.loads(session_obj.scores)
+            else:
+                scores = []
+        except (json.JSONDecodeError, TypeError) as e:
+            logger.warning(f"解析分数记录失败: {e}, 使用空列表")
+            scores = []
+        
+        avg_score = sum([s.get('score', 0) for s in scores]) / len(scores) if scores else 0
+        
+        try:
+            db.session.commit()
+            if is_plank:
+                logger.info(f"✅ 会话结束: {session_id} - 时长: {duration_seconds:.1f}秒")
+            else:
+                logger.info(f"✅ 会话结束: {session_id} - 总次数: {total_count}, 准确率: {accuracy:.2f}%")
+            
+            return jsonify({
+                "session_id": session_id,
+                "summary": {
+                    "total_count": total_count if not is_plank else int(duration_seconds),  # 平板支撑返回秒数
+                    "correct_count": correct_count if not is_plank else int(duration_seconds),
+                    "accuracy": round(accuracy, 2),
+                    "average_score": round(avg_score, 2),
+                    "duration": duration_minutes,  # 分钟
+                    "duration_seconds": int(duration_seconds) if is_plank else None,  # 平板支撑返回秒数
+                    "exercise_type": session_obj.exercise_type
+                },
+                "message": "Session ended successfully"
+            })
+        except Exception as e:
+            logger.error(f"❌ 结束会话失败（数据库错误）: {str(e)}", exc_info=True)
+            db.session.rollback()
+            return jsonify({
+                "error": "结束会话失败",
+                "message": str(e)
+            }), 500
+    except Exception as e:
+        logger.error(f"❌ 处理结束会话请求失败: {str(e)}", exc_info=True)
+        db.session.rollback()
+        import traceback
+        return jsonify({
+            "error": "服务器错误",
+            "message": str(e),
+            "details": traceback.format_exc() if app.debug else None
+        }), 500
 
 @app.route('/api/user/<user_id>/history', methods=['GET'])
+@handle_db_error
 def get_user_history(user_id):
     """
     获取用户历史记录
+    
+    Path Parameters:
+        - user_id: 用户ID
+    
+    Query Parameters:
+        - limit: 返回记录数量限制（默认10）
+        - exercise_type: 过滤特定运动类型
+    
+    Returns:
+        JSON: 用户历史会话列表
     """
-    limit = request.args.get('limit', 10, type=int)
-    exercise_type = request.args.get('exercise_type')
-    
-    query = Session.query.filter_by(user_id=user_id)
-    if exercise_type:
-        query = query.filter_by(exercise_type=exercise_type)
-    
-    # 按开始时间倒序
-    sessions = query.order_by(Session.start_time.desc()).limit(limit).all()
-    
-    return jsonify({
-        "user_id": user_id,
-        "sessions": [s.to_dict() for s in sessions],
-        "total_sessions": query.count() # 注意：这里count是总数，不是limit后的数量
-    })
+    try:
+        limit = request.args.get('limit', 10, type=int)
+        exercise_type = request.args.get('exercise_type')
+        
+        # 限制查询数量，防止过大
+        limit = min(max(1, limit), 100)  # 限制在1-100之间
+        
+        sessions = get_user_sessions(user_id, limit=limit, exercise_type=exercise_type)
+        
+        return jsonify({
+            "user_id": user_id,
+            "sessions": sessions,
+            "total_sessions": len(sessions)
+        })
+    except Exception as e:
+        logger.error(f"获取用户历史失败: {str(e)}", exc_info=True)
+        return jsonify({"error": "获取历史记录失败"}), 500
 
 @app.route('/api/analytics/pose', methods=['POST'])
 def analyze_pose():
     """
-    分析姿态数据
+    分析姿态数据（占位符接口）
     
     Request Body:
         - pose_landmarks: MediaPipe姿态关键点数据
@@ -265,39 +524,34 @@ def analyze_pose():
     
     Returns:
         JSON: 分析结果
+    
+    注意：这个接口需要实现具体的姿态分析算法
     """
     data = request.get_json()
     pose_landmarks = data.get('pose_landmarks')
     exercise_type = data.get('exercise_type', 'squat')
     
-    if not pose_landmarks:
-        return jsonify({"error": "缺少姿态关键点数据"}), 400
-
-    # 获取用户标识（优先使用认证用户ID，否则使用IP）
-    # 注意：如果未经过 require_auth 装饰器，request.user_id 可能不存在
-    user_id = getattr(request, 'user_id', request.remote_addr)
+    # TODO: 实现具体的姿态分析逻辑
+    # 这里应该包含：
+    # 1. 关键点角度计算
+    # 2. 动作标准性判断
+    # 3. 错误检测和反馈生成
+    # 4. 计数逻辑
     
-    # 获取或创建分析器实例
-    # 使用 user_id 和 exercise_type 作为键，确保每个用户的每种运动都有独立的状态
-    analyzer_key = f"{user_id}_{exercise_type}"
+    # 模拟分析结果
+    analysis_result = {
+        "is_correct": True,  # 动作是否正确
+        "score": 85,  # 动作得分 (0-100)
+        "feedback": "动作标准，继续保持！",
+        "suggestions": [],  # 改进建议
+        "key_points": {  # 关键点分析
+            "knee_angle": 90,
+            "hip_angle": 85,
+            "back_straight": True
+        }
+    }
     
-    # 如果分析器不存在，创建新的
-    if analyzer_key not in active_analyzers:
-        # 简单的内存管理：清理该用户的其他分析器，假设用户同一时间只做一个运动
-        keys_to_remove = [k for k in active_analyzers.keys() if k.startswith(f"{user_id}_")]
-        for k in keys_to_remove:
-            del active_analyzers[k]
-            
-        active_analyzers[analyzer_key] = create_analyzer(exercise_type)
-    
-    analyzer = active_analyzers[analyzer_key]
-    
-    # 执行分析
-    try:
-        result = analyzer.analyze(pose_landmarks)
-        return jsonify(result)
-    except Exception as e:
-        return jsonify({"error": f"分析过程出错: {str(e)}"}), 500
+    return jsonify(analysis_result)
 
 @app.route('/api/recommendations', methods=['GET'])
 def get_recommendations():
@@ -332,170 +586,289 @@ def get_recommendations():
 # ==================== 用户认证相关API ====================
 
 @app.route('/api/auth/register', methods=['POST'])
+@handle_db_error
 def register():
     """
     用户注册
+    
+    Request Body:
+        - username: 用户名
+        - password: 密码
+        - email: 邮箱（可选）
+        - nickname: 昵称（可选）
+    
+    Returns:
+        JSON: 注册结果和token
     """
-    data = request.get_json()
-    username = data.get('username')
-    password = data.get('password')
-    email = data.get('email', '')
-    nickname = data.get('nickname', username)
+    try:
+        data = request.get_json()
+        if not data:
+            return jsonify({"error": "请求体不能为空"}), 400
+        
+        username = sanitize_input(data.get('username'), max_length=20)
+        password = data.get('password')
+        email = sanitize_input(data.get('email', ''), max_length=255)
+        nickname = sanitize_input(data.get('nickname', username), max_length=100)
+        
+        # 输入验证
+        if not username:
+            return jsonify({"error": "用户名不能为空"}), 400
+        
+        if not validate_username(username):
+            return jsonify({"error": "用户名格式不正确（3-20个字符，只能包含字母、数字、下划线）"}), 400
+        
+        if not password:
+            return jsonify({"error": "密码不能为空"}), 400
+        
+        if not validate_password(password):
+            return jsonify({"error": "密码长度至少6位"}), 400
+        
+        if email and not validate_email(email):
+            return jsonify({"error": "邮箱格式不正确"}), 400
     
-    if not username or not password:
-        return jsonify({"error": "用户名和密码不能为空"}), 400
-    
-    if len(password) < 6:
-        return jsonify({"error": "密码长度至少6位"}), 400
-    
-    # 检查用户是否存在
-    if User.query.get(username):
-        return jsonify({"error": "用户名已存在"}), 400
-    
-    # 创建新用户
-    new_user = User(
-        user_id=username,
-        username=username,
-        password_hash=hash_password(password),
-        email=email,
-        nickname=nickname,
-        created_at=datetime.now(),
-        avatar="",
-        profile={
-            "height": 0,
-            "weight": 0,
-            "age": 0,
-            "gender": ""
-        }
-    )
-    db.session.add(new_user)
-    db.session.commit()
-    
-    # 生成token
-    token_str = generate_token()
-    expire_time = datetime.now() + timedelta(days=1)
-    
-    new_token = Token(
-        token=token_str,
-        user_id=username,
-        expire_time=expire_time
-    )
-    db.session.add(new_token)
-    db.session.commit()
-    
-    return jsonify({
-        "message": "注册成功",
-        "token": token_str,
-        "user": {
-            "user_id": username,
-            "username": username,
-            "nickname": nickname,
-            "email": email
-        }
-    }), 201
+        # 检查用户名是否已存在
+        existing_user = get_user_by_username(username)
+        if existing_user:
+            return jsonify({"error": "用户名已存在"}), 400
+        
+        # 创建新用户
+        user_id = username
+        try:
+            user = create_user({
+                "user_id": user_id,
+                "username": username,
+                "password_hash": hash_password(password),
+                "email": email,
+                "nickname": nickname or username,
+                "avatar": ""
+            })
+            
+            # 创建用户资料
+            from database import UserProfile
+            profile = UserProfile(
+                user_id=user_id,
+                height=0,
+                weight=0,
+                age=0,
+                gender=""
+            )
+            db.session.add(profile)
+            db.session.commit()
+            
+            # 生成token
+            token = generate_token()
+            expire_time = datetime.now() + timedelta(days=1)  # 24小时后过期
+            save_token(token, user_id, expire_time)
+            
+            logger.info(f"新用户注册成功: {username}")
+            
+            return jsonify({
+                "message": "注册成功",
+                "token": token,
+                "user": {
+                    "user_id": user_id,
+                    "username": username,
+                    "nickname": nickname,
+                    "email": email
+                }
+            }), 201
+        except ValueError as e:
+            return jsonify({"error": str(e)}), 400
+        except Exception as e:
+            logger.error(f"注册失败: {str(e)}", exc_info=True)
+            db.session.rollback()
+            return jsonify({"error": "注册失败，请稍后重试"}), 500
+    except Exception as e:
+        logger.error(f"注册请求处理失败: {str(e)}", exc_info=True)
+        return jsonify({"error": "请求处理失败"}), 500
 
 @app.route('/api/auth/login', methods=['POST'])
+@handle_db_error
 def login():
     """
     用户登录
+    
+    Request Body:
+        - username: 用户名
+        - password: 密码
+    
+    Returns:
+        JSON: 登录结果和token
     """
-    data = request.get_json()
-    username = data.get('username')
-    password = data.get('password')
-    
-    if not username or not password:
-        return jsonify({"error": "用户名和密码不能为空"}), 400
-    
-    user = User.query.get(username)
-    
-    if not user or user.password_hash != hash_password(password):
-        return jsonify({"error": "用户名或密码错误"}), 401
-    
-    # 生成token
-    token_str = generate_token()
-    expire_time = datetime.now() + timedelta(days=1)
-    
-    new_token = Token(
-        token=token_str,
-        user_id=username,
-        expire_time=expire_time
-    )
-    db.session.add(new_token)
-    db.session.commit()
-    
-    return jsonify({
-        "message": "登录成功",
-        "token": token_str,
-        "user": {
-            "user_id": user.user_id,
-            "username": user.username,
-            "nickname": user.nickname,
-            "email": user.email
-        }
-    })
+    try:
+        data = request.get_json()
+        if not data:
+            return jsonify({"error": "请求体不能为空"}), 400
+        
+        username = sanitize_input(data.get('username'), max_length=20)
+        password = data.get('password')
+        
+        if not username or not password:
+            return jsonify({"error": "用户名和密码不能为空"}), 400
+        
+        # 从数据库查找用户
+        user = get_user_by_username(username)
+        if not user:
+            logger.warning(f"登录失败: 用户不存在 - {username}")
+            return jsonify({"error": "用户名或密码错误"}), 401
+        
+        password_hash = hash_password(password)
+        if user.password_hash != password_hash:
+            logger.warning(f"登录失败: 密码错误 - {username}")
+            return jsonify({"error": "用户名或密码错误"}), 401
+        
+        # 生成token
+        token = generate_token()
+        expire_time = datetime.now() + timedelta(days=1)  # 24小时后过期
+        try:
+            save_token(token, user.user_id, expire_time)
+        except Exception as e:
+            logger.error(f"保存token失败: {str(e)}")
+            return jsonify({"error": "登录失败，请稍后重试"}), 500
+        
+        logger.info(f"用户登录成功: {username}")
+        
+        return jsonify({
+            "message": "登录成功",
+            "token": token,
+            "user": {
+                "user_id": user.user_id,
+                "username": user.username,
+                "nickname": user.nickname,
+                "email": user.email
+            }
+        })
+    except Exception as e:
+        logger.error(f"登录请求处理失败: {str(e)}", exc_info=True)
+        return jsonify({"error": "请求处理失败"}), 500
 
 @app.route('/api/auth/me', methods=['GET'])
 @require_auth
 def get_current_user():
     """
     获取当前用户信息（需要认证）
+    
+    Headers:
+        - Authorization: Bearer {token}
+    
+    Returns:
+        JSON: 用户信息
     """
-    user = User.query.get(request.user_id)
+    user_id = request.user_id
+    user = get_user_by_id(user_id)
+    
     if not user:
         return jsonify({"error": "用户不存在"}), 404
     
-    return jsonify(user.to_dict())
+    user_dict = user.to_dict()
+    # 移除敏感信息
+    user_dict.pop('password_hash', None)
+    
+    return jsonify(user_dict)
 
 @app.route('/api/auth/change-password', methods=['POST'])
 @require_auth
+@handle_db_error
 def change_password():
     """
     修改密码（需要认证）
+    
+    Headers:
+        - Authorization: Bearer {token}
+    
+    Request Body:
+        - old_password: 旧密码
+        - new_password: 新密码
+    
+    Returns:
+        JSON: 修改结果
     """
-    data = request.get_json()
-    old_password = data.get('old_password')
-    new_password = data.get('new_password')
-    
-    if not old_password or not new_password:
-        return jsonify({"error": "旧密码和新密码不能为空"}), 400
-    
-    if len(new_password) < 6:
-        return jsonify({"error": "新密码长度至少6位"}), 400
-    
-    user = User.query.get(request.user_id)
-    if not user:
-        return jsonify({"error": "用户不存在"}), 404
-    
-    # 验证旧密码
-    if user.password_hash != hash_password(old_password):
-        return jsonify({"error": "旧密码错误"}), 401
-    
-    # 更新密码
-    user.password_hash = hash_password(new_password)
-    db.session.commit()
-    
-    return jsonify({"message": "密码修改成功"})
+    try:
+        data = request.get_json()
+        if not data:
+            return jsonify({"error": "请求体不能为空"}), 400
+        
+        old_password = data.get('old_password')
+        new_password = data.get('new_password')
+        
+        if not old_password or not new_password:
+            return jsonify({"error": "旧密码和新密码不能为空"}), 400
+        
+        if not validate_password(new_password):
+            return jsonify({"error": "新密码长度至少6位"}), 400
+        
+        if old_password == new_password:
+            return jsonify({"error": "新密码不能与旧密码相同"}), 400
+        
+        user_id = request.user_id
+        user = get_user_by_id(user_id)
+        
+        if not user:
+            return jsonify({"error": "用户不存在"}), 404
+        
+        # 验证旧密码
+        if user.password_hash != hash_password(old_password):
+            logger.warning(f"密码修改失败: 旧密码错误 - {user_id}")
+            return jsonify({"error": "旧密码错误"}), 401
+        
+        # 更新密码
+        user.password_hash = hash_password(new_password)
+        db.session.commit()
+        
+        logger.info(f"密码修改成功: {user_id}")
+        return jsonify({"message": "密码修改成功"})
+    except Exception as e:
+        logger.error(f"修改密码失败: {str(e)}", exc_info=True)
+        db.session.rollback()
+        return jsonify({"error": "修改失败，请稍后重试"}), 500
 
 @app.route('/api/user/profile', methods=['GET'])
 @require_auth
 def get_user_profile():
     """
     获取用户个人资料（需要认证）
+    
+    Headers:
+        - Authorization: Bearer {token}
+    
+    Returns:
+        JSON: 用户个人资料
     """
-    user = User.query.get(request.user_id)
+    user_id = request.user_id
+    user = get_user_by_id(user_id)
+    
     if not user:
         return jsonify({"error": "用户不存在"}), 404
     
-    return jsonify(user.to_dict())
+    user_dict = user.to_dict()
+    return jsonify(user_dict)
 
 @app.route('/api/user/profile', methods=['PUT'])
 @require_auth
+@handle_db_error
 def update_user_profile():
     """
     更新用户个人资料（需要认证）
+    
+    Headers:
+        - Authorization: Bearer {token}
+    
+    Request Body:
+        - nickname: 昵称（可选）
+        - email: 邮箱（可选）
+        - avatar: 头像URL（可选）
+        - profile: 个人资料对象（可选）
+            - height: 身高（可选）
+            - weight: 体重（可选）
+            - age: 年龄（可选）
+            - gender: 性别（可选）
+    
+    Returns:
+        JSON: 更新后的用户信息
     """
     data = request.get_json()
-    user = User.query.get(request.user_id)
+    user_id = request.user_id
+    user = get_user_by_id(user_id)
     
     if not user:
         return jsonify({"error": "用户不存在"}), 404
@@ -507,29 +880,52 @@ def update_user_profile():
         user.email = data['email']
     if 'avatar' in data:
         user.avatar = data['avatar']
+    
+    # 更新用户资料
     if 'profile' in data:
-        # 更新JSONB字段
-        current_profile = dict(user.profile) if user.profile else {}
-        current_profile.update(data['profile'])
-        user.profile = current_profile
+        if not user.profile:
+            from database import UserProfile
+            user.profile = UserProfile(user_id=user_id)
+            db.session.add(user.profile)
+        
+        profile_data = data['profile']
+        if 'height' in profile_data:
+            user.profile.height = profile_data['height']
+        if 'weight' in profile_data:
+            user.profile.weight = profile_data['weight']
+        if 'age' in profile_data:
+            user.profile.age = profile_data['age']
+        if 'gender' in profile_data:
+            user.profile.gender = profile_data['gender']
     
     db.session.commit()
     
-    return jsonify(user.to_dict())
+    # 返回更新后的用户信息
+    updated_user = user.to_dict()
+    return jsonify(updated_user)
 
 @app.route('/api/user/plan', methods=['GET'])
 @require_auth
-def get_user_plan():
+@handle_db_error
+def get_user_plan_api():
     """
     获取用户的健身计划（需要认证）
-    """
-    plan = Plan.query.filter_by(user_id=request.user_id).first()
     
-    if plan:
-        return jsonify(plan.to_dict())
-    else:
-        # 返回默认计划
-        default_plan = {
+    Headers:
+        - Authorization: Bearer {token}
+    
+    Returns:
+        JSON: 用户的健身计划
+    """
+    try:
+        user_id = request.user_id
+        plan = get_user_plan(user_id)
+        
+        if plan:
+            return jsonify(plan)
+        else:
+            # 返回默认计划
+            default_plan = {
             "daily_goals": {
                 "squat": 20,
                 "pushup": 15,
@@ -539,6 +935,24 @@ def get_user_plan():
             "weekly_goals": {
                 "total_sessions": 5,
                 "total_duration": 150  # 分钟
+                },
+                "created_at": datetime.now().isoformat(),
+                "updated_at": datetime.now().isoformat()
+            }
+            return jsonify(default_plan)
+    except Exception as e:
+        logger.error(f"获取用户计划失败: {str(e)}", exc_info=True)
+        # 返回默认计划而不是错误
+        default_plan = {
+            "daily_goals": {
+                "squat": 20,
+                "pushup": 15,
+                "plank": 60,
+                "jumping_jack": 30
+            },
+            "weekly_goals": {
+                "total_sessions": 5,
+                "total_duration": 150
             },
             "created_at": datetime.now().isoformat(),
             "updated_at": datetime.now().isoformat()
@@ -550,33 +964,27 @@ def get_user_plan():
 def update_user_plan():
     """
     更新用户的健身计划（需要认证）
+    
+    Headers:
+        - Authorization: Bearer {token}
+    
+    Request Body:
+        - daily_goals: 每日目标（可选）
+            - squat: 深蹲次数
+            - pushup: 俯卧撑次数
+            - plank: 平板支撑秒数
+            - jumping_jack: 开合跳次数
+        - weekly_goals: 每周目标（可选）
+            - total_sessions: 总运动次数
+            - total_duration: 总运动时长（分钟）
+    
+    Returns:
+        JSON: 更新后的健身计划
     """
     data = request.get_json()
-    plan = Plan.query.filter_by(user_id=request.user_id).first()
+    user_id = request.user_id
     
-    if not plan:
-        plan = Plan(
-            user_id=request.user_id,
-            daily_goals={},
-            weekly_goals={},
-            created_at=datetime.now()
-        )
-        db.session.add(plan)
-    
-    # 更新每日目标
-    if 'daily_goals' in data:
-        current_daily = dict(plan.daily_goals) if plan.daily_goals else {}
-        current_daily.update(data['daily_goals'])
-        plan.daily_goals = current_daily
-    
-    # 更新每周目标
-    if 'weekly_goals' in data:
-        current_weekly = dict(plan.weekly_goals) if plan.weekly_goals else {}
-        current_weekly.update(data['weekly_goals'])
-        plan.weekly_goals = current_weekly
-    
-    plan.updated_at = datetime.now()
-    db.session.commit()
+    plan = save_user_plan(user_id, data)
     
     return jsonify(plan.to_dict())
 
@@ -1035,14 +1443,33 @@ def ai_generate_fitness_plan(height, weight, age, gender):
 def generate_ai_plan():
     """
     AI Agent: 根据用户生命体征生成个性化健身计划建议（需要认证）
+    
+    Headers:
+        - Authorization: Bearer {token}
+    
+    Request Body:
+        - height: 身高（cm，可选，从用户资料获取）
+        - weight: 体重（kg，可选，从用户资料获取）
+        - age: 年龄（可选，从用户资料获取）
+        - gender: 性别（可选，从用户资料获取）
+    
+    Returns:
+        JSON: AI生成的健身计划建议
+            - daily_goals: 每日目标
+            - weekly_goals: 每周目标
+            - suggestions: 建议说明
+            - bmi: BMI指数
+            - fitness_level: 健身水平
+            - reasoning: 生成理由
     """
     data = request.get_json() or {}
-    user = User.query.get(request.user_id)
+    user_id = request.user_id
     
+    user = get_user_by_id(user_id)
     if not user:
         return jsonify({"error": "用户不存在"}), 404
     
-    profile = user.profile or {}
+    profile = user.profile.to_dict() if user.profile else {}
     
     # 优先使用请求中的数据，否则从用户资料中获取
     height = data.get('height') or profile.get('height')
@@ -1062,5 +1489,920 @@ def generate_ai_plan():
     
     return jsonify(ai_plan)
 
+# ==================== 成就系统API ====================
+
+# 成就定义
+ACHIEVEMENT_DEFINITIONS = {
+    "first_exercise": {"name": "初出茅庐", "icon": "🎯", "description": "完成第一次运动"},
+    "exercise_10": {"name": "小试牛刀", "icon": "💪", "description": "累计完成10次运动"},
+    "exercise_100": {"name": "百炼成钢", "icon": "🔥", "description": "累计完成100次运动"},
+    "streak_3": {"name": "三日坚持", "icon": "📅", "description": "连续3天运动"},
+    "streak_7": {"name": "一周坚持", "icon": "🔥", "description": "连续7天运动"},
+    "streak_30": {"name": "月度坚持", "icon": "⭐", "description": "连续30天运动"},
+    "squat_100": {"name": "深蹲达人", "icon": "💪", "description": "累计完成100次深蹲"},
+    "pushup_100": {"name": "俯卧撑达人", "icon": "💪", "description": "累计完成100次俯卧撑"},
+    "accuracy_90": {"name": "精准大师", "icon": "🎯", "description": "单次准确率达到90%"},
+    "accuracy_100": {"name": "完美无缺", "icon": "👑", "description": "单次准确率达到100%"},
+    "duration_10h": {"name": "时间管理大师", "icon": "⏰", "description": "累计运动时长达到10小时"},
+    "all_exercises": {"name": "全能战士", "icon": "🏆", "description": "完成所有运动类型"},
+    # 挑战相关成就
+    "challenge_first": {"name": "挑战新手", "icon": "🎖️", "description": "完成第一个每日挑战"},
+    "challenge_7": {"name": "挑战周星", "icon": "⭐", "description": "完成7个每日挑战"},
+    "challenge_30": {"name": "挑战月神", "icon": "👑", "description": "完成30个每日挑战"},
+    "challenge_streak_3": {"name": "挑战连击", "icon": "🔥", "description": "连续3天完成每日挑战"},
+    "challenge_streak_7": {"name": "挑战大师", "icon": "💎", "description": "连续7天完成每日挑战"},
+    "challenge_combo": {"name": "组合挑战者", "icon": "🎯", "description": "完成一次组合挑战"},
+    "challenge_perfect": {"name": "完美挑战", "icon": "🏅", "description": "单次挑战准确率达到100%"}
+}
+
+def check_achievements(user_id):
+    """检查并解锁用户成就"""
+    try:
+        # 从数据库获取用户会话
+        user_sessions = Session.query.filter(
+            Session.user_id == user_id,
+            Session.status == 'completed'
+        ).all()
+        
+        total_sessions = len(user_sessions)
+        total_count = sum(s.total_count for s in user_sessions)
+        
+        # 统计各运动类型
+        exercise_counts = {}
+        for session in user_sessions:
+            ex_type = session.exercise_type
+            exercise_counts[ex_type] = exercise_counts.get(ex_type, 0) + session.total_count
+        
+        # 统计准确率
+        max_accuracy = 0
+        for session in user_sessions:
+            if session.total_count > 0:
+                # 确保correct_count不超过total_count，准确率不超过100%
+                correct_count = min(session.correct_count or 0, session.total_count)
+                accuracy = min(100, (correct_count / session.total_count) * 100)
+                max_accuracy = max(max_accuracy, accuracy)
+        
+        # 统计总时长
+        total_duration = 0
+        for session in user_sessions:
+            if session.end_time:
+                duration = (session.end_time - session.start_time).total_seconds() / 3600  # 小时
+                total_duration += duration
+        
+        # 获取连续打卡天数
+        checkin_stats = get_user_checkin_stats(user_id)
+        current_streak = checkin_stats.get('current_streak', 0)
+        
+        # 获取挑战完成记录
+        challenge_completions = get_challenge_completions(user_id)
+        total_challenges = len(challenge_completions)
+        
+        # 计算连续完成挑战天数
+        challenge_streak = 0
+        today = date.today()
+        check_date = today
+        while True:
+            date_str = check_date.isoformat()
+            completions_on_date = get_challenge_completions(user_id, date_str)
+            if completions_on_date:
+                challenge_streak += 1
+                check_date = check_date - timedelta(days=1)
+            else:
+                break
+        
+        # 检查是否有组合挑战完成记录
+        has_combo_challenge = any('combo' in cid for cid in challenge_completions)
+        
+        # 获取已解锁成就
+        user_achievements_dict = get_user_achievements(user_id)
+        unlocked_ids = set(user_achievements_dict.keys())
+        
+        new_achievements = []
+        
+        # 检查成就
+        checks = [
+            ("first_exercise", total_sessions >= 1),
+            ("exercise_10", total_sessions >= 10),
+            ("exercise_100", total_sessions >= 100),
+            ("streak_3", current_streak >= 3),
+            ("streak_7", current_streak >= 7),
+            ("streak_30", current_streak >= 30),
+            ("squat_100", exercise_counts.get('squat', 0) >= 100),
+            ("pushup_100", exercise_counts.get('pushup', 0) >= 100),
+            ("accuracy_90", max_accuracy >= 90),
+            ("accuracy_100", max_accuracy >= 100),
+            ("duration_10h", total_duration >= 10),
+            ("all_exercises", len([k for k in exercise_counts.keys() if k in ['squat', 'pushup', 'plank', 'jumping_jack']]) >= 4),
+            # 挑战相关成就
+            ("challenge_first", total_challenges >= 1),
+            ("challenge_7", total_challenges >= 7),
+            ("challenge_30", total_challenges >= 30),
+            ("challenge_streak_3", challenge_streak >= 3),
+            ("challenge_streak_7", challenge_streak >= 7),
+            ("challenge_combo", has_combo_challenge)
+        ]
+        
+        for achievement_id, condition in checks:
+            if condition and achievement_id not in unlocked_ids:
+                if unlock_achievement(user_id, achievement_id):
+                    new_achievements.append(achievement_id)
+                    logger.info(f"用户 {user_id} 解锁成就: {achievement_id}")
+        
+        return new_achievements
+    except Exception as e:
+        logger.error(f"检查成就失败: {str(e)}", exc_info=True)
+        return []
+
+@app.route('/api/user/achievements', methods=['GET'])
+@require_auth
+@handle_db_error
+def get_user_achievements_api():
+    """获取用户成就列表"""
+    try:
+        user_id = request.user_id
+        user_achievements_dict = get_user_achievements(user_id)
+        
+        # 返回所有成就（已解锁和未解锁）
+        result = []
+        for achievement_id, definition in ACHIEVEMENT_DEFINITIONS.items():
+            if achievement_id in user_achievements_dict:
+                achievement_data = user_achievements_dict[achievement_id]
+                result.append({
+                    "id": achievement_id,
+                    "name": definition["name"],
+                    "icon": definition["icon"],
+                    "description": definition["description"],
+                    "unlocked": True,
+                    "unlocked_at": achievement_data.get("unlocked_at")
+                })
+            else:
+                result.append({
+                    "id": achievement_id,
+                    "name": definition["name"],
+                    "icon": definition["icon"],
+                    "description": definition["description"],
+                    "unlocked": False
+                })
+        
+        return jsonify({"achievements": result})
+    except Exception as e:
+        logger.error(f"获取成就列表失败: {str(e)}", exc_info=True)
+        return jsonify({"error": "获取成就列表失败"}), 500
+
+@app.route('/api/user/achievements/check', methods=['POST'])
+@require_auth
+@handle_db_error
+def check_user_achievements():
+    """检查并解锁新成就"""
+    try:
+        user_id = request.user_id
+        new_achievement_ids = check_achievements(user_id)
+        
+        user_achievements_dict = get_user_achievements(user_id)
+        
+        result = []
+        for achievement_id in new_achievement_ids:
+            achievement_data = user_achievements_dict.get(achievement_id, {})
+            result.append({
+                "id": achievement_id,
+                "name": ACHIEVEMENT_DEFINITIONS[achievement_id]["name"],
+                "icon": ACHIEVEMENT_DEFINITIONS[achievement_id]["icon"],
+                "description": ACHIEVEMENT_DEFINITIONS[achievement_id]["description"],
+                "unlocked_at": achievement_data.get("unlocked_at")
+            })
+        
+        return jsonify({
+            "new_achievements": result,
+            "count": len(new_achievement_ids)
+        })
+    except Exception as e:
+        logger.error(f"检查成就失败: {str(e)}", exc_info=True)
+        return jsonify({"error": "检查成就失败"}), 500
+
+# ==================== 排行榜API ====================
+
+@app.route('/api/leaderboard/weekly-count', methods=['GET'])
+@require_auth
+@handle_db_error
+def get_weekly_count_leaderboard():
+    """获取本周运动次数排行榜"""
+    try:
+        today = datetime.now()
+        week_start = today - timedelta(days=today.weekday())
+        week_start = week_start.replace(hour=0, minute=0, second=0, microsecond=0)
+        week_end = week_start + timedelta(days=7)
+        
+        # 从数据库查询本周完成的会话
+        from sqlalchemy import func
+        from database import Session, User
+        
+        leaderboard_query = db.session.query(
+            Session.user_id,
+            func.sum(Session.total_count).label('total_count')
+        ).filter(
+            Session.status == 'completed',
+            Session.start_time >= week_start,
+            Session.start_time < week_end
+        ).group_by(Session.user_id).order_by(func.sum(Session.total_count).desc()).limit(20).all()
+        
+        result = []
+        for rank, (user_id, count) in enumerate(leaderboard_query, 1):
+            user = get_user_by_id(user_id)
+            if user:
+                result.append({
+                    "rank": rank,
+                    "user_id": user_id,
+                    "username": user.username,
+                    "nickname": user.nickname or user.username,
+                    "count": int(count) if count else 0
+                })
+        
+        return jsonify({"leaderboard": result})
+    except Exception as e:
+        logger.error(f"获取排行榜失败: {str(e)}", exc_info=True)
+        return jsonify({"error": "获取排行榜失败"}), 500
+
+@app.route('/api/leaderboard/weekly-duration', methods=['GET'])
+@require_auth
+@handle_db_error
+def get_weekly_duration_leaderboard():
+    """获取本周运动时长排行榜"""
+    try:
+        today = datetime.now()
+        week_start = today - timedelta(days=today.weekday())
+        week_start = week_start.replace(hour=0, minute=0, second=0, microsecond=0)
+        week_end = week_start + timedelta(days=7)
+        
+        # 从数据库查询本周完成的会话
+        from sqlalchemy import func
+        from database import Session
+        
+        sessions = Session.query.filter(
+            Session.status == 'completed',
+            Session.start_time >= week_start,
+            Session.start_time < week_end,
+            Session.end_time.isnot(None)
+        ).all()
+        
+        user_durations = {}
+        for session in sessions:
+            duration = (session.end_time - session.start_time).total_seconds() / 60  # 分钟
+            user_durations[session.user_id] = user_durations.get(session.user_id, 0) + duration
+        
+        leaderboard = sorted(user_durations.items(), key=lambda x: x[1], reverse=True)[:20]
+        
+        result = []
+        for rank, (user_id, duration) in enumerate(leaderboard, 1):
+            user = get_user_by_id(user_id)
+            if user:
+                result.append({
+                    "rank": rank,
+                    "user_id": user_id,
+                    "username": user.username,
+                    "nickname": user.nickname or user.username,
+                    "duration": round(duration, 2)
+                })
+        
+        return jsonify({"leaderboard": result})
+    except Exception as e:
+        logger.error(f"获取时长排行榜失败: {str(e)}", exc_info=True)
+        return jsonify({"error": "获取排行榜失败"}), 500
+
+@app.route('/api/leaderboard/streak', methods=['GET'])
+@require_auth
+@handle_db_error
+def get_streak_leaderboard():
+    """获取连续打卡排行榜"""
+    try:
+        from database import User
+        
+        # 获取所有用户的打卡统计
+        all_users = User.query.all()
+        user_streaks = []
+        
+        for user in all_users:
+            stats = get_user_checkin_stats(user.user_id)
+            if stats['current_streak'] > 0:
+                user_streaks.append({
+                    "user_id": user.user_id,
+                    "streak": stats['current_streak']
+                })
+        
+        user_streaks.sort(key=lambda x: x['streak'], reverse=True)
+        user_streaks = user_streaks[:20]
+        
+        result = []
+        for rank, item in enumerate(user_streaks, 1):
+            user = get_user_by_id(item['user_id'])
+            if user:
+                result.append({
+                    "rank": rank,
+                    "user_id": item['user_id'],
+                    "username": user.username,
+                    "nickname": user.nickname or user.username,
+                    "streak": item['streak']
+                })
+        
+        return jsonify({"leaderboard": result})
+    except Exception as e:
+        logger.error(f"获取打卡排行榜失败: {str(e)}", exc_info=True)
+        return jsonify({"error": "获取排行榜失败"}), 500
+
+@app.route('/api/leaderboard/accuracy', methods=['GET'])
+@require_auth
+@handle_db_error
+def get_accuracy_leaderboard():
+    """获取准确率排行榜"""
+    try:
+        from sqlalchemy import func
+        from database import Session
+        
+        # 计算每个用户的平均准确率
+        user_stats = db.session.query(
+            Session.user_id,
+            func.sum(Session.correct_count).label('total_correct'),
+            func.sum(Session.total_count).label('total_count')
+        ).filter(
+            Session.status == 'completed',
+            Session.total_count > 0
+        ).group_by(Session.user_id).having(
+            func.sum(Session.total_count) > 0
+        ).all()
+        
+        avg_accuracies = {}
+        for user_id, total_correct, total_count in user_stats:
+            if total_count and total_count > 0:
+                # 确保准确率不超过100%
+                avg_accuracies[user_id] = min(100, (total_correct / total_count) * 100)
+        
+        leaderboard = sorted(avg_accuracies.items(), key=lambda x: x[1], reverse=True)[:20]
+        
+        result = []
+        for rank, (user_id, accuracy) in enumerate(leaderboard, 1):
+            user = get_user_by_id(user_id)
+            if user:
+                result.append({
+                    "rank": rank,
+                    "user_id": user_id,
+                    "username": user.username,
+                    "nickname": user.nickname or user.username,
+                    "accuracy": round(accuracy, 2)
+                })
+        
+        return jsonify({"leaderboard": result})
+    except Exception as e:
+        logger.error(f"获取准确率排行榜失败: {str(e)}", exc_info=True)
+        return jsonify({"error": "获取排行榜失败"}), 500
+
+# ==================== 打卡系统API ====================
+
+@app.route('/api/checkin', methods=['POST'])
+@require_auth
+@handle_db_error
+def checkin():
+    """用户打卡"""
+    try:
+        user_id = request.user_id
+        
+        # 添加打卡记录
+        success = add_checkin(user_id)
+        if not success:
+            return jsonify({
+                "message": "今天已打卡",
+                "current_streak": get_user_checkin_stats(user_id)['current_streak']
+            }), 200
+        
+        # 获取更新后的统计
+        stats = get_user_checkin_stats(user_id)
+        
+        # 检查成就
+        try:
+            check_achievements(user_id)
+        except Exception as e:
+            logger.warning(f"检查成就失败: {str(e)}")
+        
+        return jsonify({
+            "message": "打卡成功",
+            "current_streak": stats['current_streak'],
+            "longest_streak": stats['longest_streak'],
+            "total_days": stats['total_days']
+        })
+    except ValueError as e:
+        return jsonify({"error": str(e)}), 400
+    except Exception as e:
+        logger.error(f"打卡失败: {str(e)}", exc_info=True)
+        return jsonify({"error": "打卡失败"}), 500
+
+@app.route('/api/user/checkin/streak', methods=['GET'])
+@require_auth
+@handle_db_error
+def get_checkin_streak():
+    """获取用户打卡连续天数"""
+    try:
+        user_id = request.user_id
+        stats = get_user_checkin_stats(user_id)
+        
+        return jsonify({
+            "current_streak": stats['current_streak'],
+            "longest_streak": stats['longest_streak'],
+            "total_days": stats['total_days'],
+            "last_checkin_date": stats.get('last_checkin_date')
+        })
+    except Exception as e:
+        logger.error(f"获取打卡统计失败: {str(e)}", exc_info=True)
+        return jsonify({"error": "获取打卡统计失败"}), 500
+
+@app.route('/api/user/checkin/calendar', methods=['GET'])
+@require_auth
+@handle_db_error
+def get_checkin_calendar():
+    """获取用户打卡日历数据"""
+    try:
+        user_id = request.user_id
+        calendar_data = get_checkin_calendar(user_id, days=90)
+        stats = get_user_checkin_stats(user_id)
+        
+        return jsonify({
+            "calendar": calendar_data,
+            "current_streak": stats['current_streak'],
+            "longest_streak": stats['longest_streak'],
+            "total_days": stats['total_days']
+        })
+    except Exception as e:
+        logger.error(f"获取打卡日历失败: {str(e)}", exc_info=True)
+        return jsonify({"error": "获取打卡日历失败"}), 500
+
+# ==================== 训练报告生成API ====================
+
+@app.route('/api/reports/weekly', methods=['POST'])
+@require_auth
+@handle_db_error
+def generate_weekly_report():
+    """生成周报"""
+    try:
+        user_id = request.user_id
+        user = get_user_by_id(user_id)
+        user_plan = get_user_plan(user_id)
+        
+        # 计算本周数据
+        today = datetime.now()
+        week_start = today - timedelta(days=today.weekday())
+        week_start = week_start.replace(hour=0, minute=0, second=0, microsecond=0)
+        week_end = week_start + timedelta(days=7)
+        
+        # 从数据库查询本周会话
+        from database import Session
+        weekly_sessions = Session.query.filter(
+            Session.user_id == user_id,
+            Session.status == 'completed',
+            Session.start_time >= week_start,
+            Session.start_time < week_end
+        ).all()
+    
+        total_count = sum(s.total_count for s in weekly_sessions)
+        total_duration = 0
+        exercise_counts = {}
+        accuracy_scores = []
+        
+        for session in weekly_sessions:
+            if session.end_time:
+                duration = (session.end_time - session.start_time).total_seconds() / 60
+                total_duration += duration
+            
+            ex_type = session.exercise_type
+            exercise_counts[ex_type] = exercise_counts.get(ex_type, 0) + session.total_count
+            
+            if session.total_count > 0:
+                # 确保correct_count不超过total_count，准确率不超过100%
+                correct_count = min(session.correct_count or 0, session.total_count)
+                accuracy = min(100, (correct_count / session.total_count) * 100)
+                accuracy_scores.append(accuracy)
+        
+        avg_accuracy = sum(accuracy_scores) / len(accuracy_scores) if accuracy_scores else 0
+        
+        # 检查目标完成情况
+        daily_goals = {}
+        if user_plan:
+            daily_goals = json.loads(user_plan.daily_goals) if user_plan.daily_goals else {}
+        
+        goal_completion = {}
+        for ex_type, count in exercise_counts.items():
+            goal = daily_goals.get(ex_type, 0)
+            if goal > 0:
+                goal_completion[ex_type] = {
+                    "target": goal * 7,  # 周目标
+                    "actual": count,
+                    "completion_rate": round((count / (goal * 7)) * 100, 2) if goal > 0 else 0
+                }
+        
+        # 生成AI建议（简化版，实际可以调用智谱AI）
+        suggestions = []
+        if avg_accuracy < 80:
+            suggestions.append("您的动作准确率还有提升空间，建议放慢动作速度，确保每个动作都做到位。")
+        if total_duration < 150:
+            suggestions.append("本周运动时长较少，建议增加运动频率，每天至少运动30分钟。")
+        if len(exercise_counts) < 3:
+            suggestions.append("建议尝试更多种类的运动，全面锻炼身体各个部位。")
+        
+        report = {
+            "period": f"{week_start.strftime('%Y-%m-%d')} 至 {week_end.strftime('%Y-%m-%d')}",
+            "summary": {
+                "total_sessions": len(weekly_sessions),
+                "total_count": total_count,
+                "total_duration": round(total_duration, 2),
+                "avg_accuracy": round(avg_accuracy, 2)
+            },
+            "exercise_distribution": exercise_counts,
+            "goal_completion": goal_completion,
+            "suggestions": suggestions,
+            "generated_at": datetime.now().isoformat()
+        }
+        
+        return jsonify(report)
+    except Exception as e:
+        logger.error(f"生成周报失败: {str(e)}", exc_info=True)
+        return jsonify({"error": "生成周报失败"}), 500
+
+@app.route('/api/reports/monthly', methods=['POST'])
+@require_auth
+@handle_db_error
+def generate_monthly_report():
+    """生成月报"""
+    try:
+        user_id = request.user_id
+        
+        today = datetime.now()
+        month_start = today.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
+        if today.month == 12:
+            month_end = today.replace(year=today.year + 1, month=1, day=1)
+        else:
+            month_end = today.replace(month=today.month + 1, day=1)
+        
+        # 从数据库查询本月会话
+        from database import Session
+        monthly_sessions = Session.query.filter(
+            Session.user_id == user_id,
+            Session.status == 'completed',
+            Session.start_time >= month_start,
+            Session.start_time < month_end
+        ).all()
+        
+        total_count = sum(s.total_count for s in monthly_sessions)
+        total_duration = 0
+        exercise_counts = {}
+        
+        for session in monthly_sessions:
+            if session.end_time:
+                duration = (session.end_time - session.start_time).total_seconds() / 60
+                total_duration += duration
+            
+            ex_type = session.exercise_type
+            exercise_counts[ex_type] = exercise_counts.get(ex_type, 0) + session.total_count
+        
+        # 获取成就
+        user_achievements_dict = get_user_achievements(user_id)
+        unlocked_achievements = len(user_achievements_dict)
+        
+        report = {
+            "month": today.strftime('%Y-%m'),
+            "summary": {
+                "total_sessions": len(monthly_sessions),
+                "total_count": total_count,
+                "total_duration": round(total_duration, 2),
+                "unlocked_achievements": unlocked_achievements
+            },
+            "exercise_distribution": exercise_counts,
+            "achievements_unlocked": unlocked_achievements,
+            "generated_at": datetime.now().isoformat()
+        }
+        
+        return jsonify(report)
+    except Exception as e:
+        logger.error(f"生成月报失败: {str(e)}", exc_info=True)
+        return jsonify({"error": "生成月报失败"}), 500
+
+# ==================== 每日挑战API ====================
+
+def generate_daily_challenge():
+    """生成每日挑战"""
+    challenges = [
+        {
+            "id": "squat_50",
+            "type": "count",
+            "exercise": "squat",
+            "name": "深蹲挑战",
+            "target": 50,
+            "description": "今天完成50个深蹲",
+            "reward": {"points": 100}
+        },
+        {
+            "id": "pushup_30",
+            "type": "count",
+            "exercise": "pushup",
+            "name": "俯卧撑挑战",
+            "target": 30,
+            "description": "今天完成30个俯卧撑",
+            "reward": {"points": 80}
+        },
+        {
+            "id": "plank_120",
+            "type": "duration",
+            "exercise": "plank",
+            "name": "平板支撑挑战",
+            "target": 120,
+            "description": "平板支撑坚持2分钟",
+            "reward": {"points": 90}
+        },
+        {
+            "id": "combo_challenge",
+            "type": "combo",
+            "exercises": ["squat", "pushup", "jumping_jack"],
+            "name": "组合挑战",
+            "targets": {"squat": 20, "pushup": 15, "jumping_jack": 20},
+            "description": "完成深蹲20次+俯卧撑15次+开合跳20次",
+            "reward": {"points": 150}
+        }
+    ]
+    
+    # 根据日期选择挑战（确保每天相同）
+    today = datetime.now().date()
+    day_of_year = today.timetuple().tm_yday
+    selected_challenge = challenges[day_of_year % len(challenges)]
+    
+    return {
+        **selected_challenge,
+        "date": today.isoformat(),
+        "available": True
+    }
+
+@app.route('/api/challenges/daily', methods=['GET'])
+@require_auth
+def get_daily_challenge():
+    """获取今日挑战"""
+    challenge = generate_daily_challenge()
+    return jsonify(challenge)
+
+def validate_challenge_completion(user_id, challenge_id, challenge_data):
+    """
+    验证用户是否真的完成了挑战
+    
+    Args:
+        user_id: 用户ID
+        challenge_id: 挑战ID
+        challenge_data: 挑战数据（包含type, exercise, target等）
+    
+    Returns:
+        tuple: (是否完成, 实际完成值, 目标值)
+    """
+    today = datetime.now().date()
+    today_start = datetime.combine(today, datetime.min.time())
+    today_end = datetime.combine(today, datetime.max.time())
+    
+    # 查询今天的会话
+    today_sessions = Session.query.filter(
+        Session.user_id == user_id,
+        Session.status == 'completed',
+        Session.start_time >= today_start,
+        Session.start_time <= today_end
+    ).all()
+    
+    challenge_type = challenge_data.get('type')
+    
+    if challenge_type == 'count':
+        # 计数类挑战：检查指定运动的累计次数
+        exercise = challenge_data.get('exercise')
+        target = challenge_data.get('target', 0)
+        
+        total_count = 0
+        for session in today_sessions:
+            if session.exercise_type == exercise:
+                total_count += session.total_count
+        
+        completed = total_count >= target
+        return completed, total_count, target
+    
+    elif challenge_type == 'duration':
+        # 时长类挑战：检查指定运动的累计时长
+        exercise = challenge_data.get('exercise')
+        target = challenge_data.get('target', 0)  # 秒
+        
+        total_duration = 0
+        for session in today_sessions:
+            if session.exercise_type == exercise and session.end_time:
+                duration = (session.end_time - session.start_time).total_seconds()
+                total_duration += duration
+        
+        completed = total_duration >= target
+        return completed, int(total_duration), target
+    
+    elif challenge_type == 'combo':
+        # 组合挑战：检查多个运动是否都达到目标
+        exercises = challenge_data.get('exercises', [])
+        targets = challenge_data.get('targets', {})
+        
+        exercise_counts = {}
+        for session in today_sessions:
+            ex_type = session.exercise_type
+            if ex_type in exercises:
+                if ex_type == 'plank':
+                    # 平板支撑：使用时长（秒）
+                    if session.end_time:
+                        duration_seconds = int((session.end_time - session.start_time).total_seconds())
+                    else:
+                        duration_seconds = 0
+                    exercise_counts[ex_type] = exercise_counts.get(ex_type, 0) + duration_seconds
+                else:
+                    # 其他运动：使用次数
+                    exercise_counts[ex_type] = exercise_counts.get(ex_type, 0) + session.total_count
+        
+        all_completed = True
+        for exercise in exercises:
+            if exercise_counts.get(exercise, 0) < targets.get(exercise, 0):
+                all_completed = False
+                break
+        
+        return all_completed, exercise_counts, targets
+    
+    return False, 0, 0
+
+@app.route('/api/challenges/<challenge_id>/complete', methods=['POST', 'OPTIONS'])
+@require_auth
+def complete_challenge_endpoint(challenge_id):
+    """
+    完成挑战（带验证）
+    
+    Path Parameters:
+        - challenge_id: 挑战ID
+    
+    Returns:
+        JSON: 完成结果
+    """
+    try:
+        user_id = request.user_id
+        
+        # 获取挑战数据
+        challenge = generate_daily_challenge()
+        if challenge.get('id') != challenge_id:
+            # 如果挑战ID不匹配，尝试从挑战列表中找到对应的挑战
+            challenges = [
+                {"id": "squat_50", "type": "count", "exercise": "squat", "target": 50},
+                {"id": "pushup_30", "type": "count", "exercise": "pushup", "target": 30},
+                {"id": "plank_120", "type": "duration", "exercise": "plank", "target": 120},
+                {"id": "combo_challenge", "type": "combo", "exercises": ["squat", "pushup", "jumping_jack"], 
+                 "targets": {"squat": 20, "pushup": 15, "jumping_jack": 20}}
+            ]
+            challenge_data = next((c for c in challenges if c.get('id') == challenge_id), None)
+            if not challenge_data:
+                return jsonify({"error": "挑战不存在"}), 404
+        else:
+            challenge_data = challenge
+        
+        # 验证用户是否真的完成了挑战
+        completed, actual_value, target_value = validate_challenge_completion(user_id, challenge_id, challenge_data)
+        
+        if not completed:
+            # 构建友好的错误消息
+            if challenge_data.get('type') == 'count':
+                exercise_name = {'squat': '深蹲', 'pushup': '俯卧撑', 'jumping_jack': '开合跳'}.get(
+                    challenge_data.get('exercise'), challenge_data.get('exercise')
+                )
+                return jsonify({
+                    "error": "挑战未完成",
+                    "message": f"您今天只完成了 {actual_value} 次{exercise_name}，还需要 {max(0, target_value - actual_value)} 次才能完成挑战",
+                    "actual": actual_value,
+                    "target": target_value,
+                    "completed": False
+                }), 400
+            elif challenge_data.get('type') == 'duration':
+                exercise_name = {'plank': '平板支撑'}.get(challenge_data.get('exercise'), challenge_data.get('exercise'))
+                actual_minutes = actual_value // 60
+                target_minutes = target_value // 60
+                return jsonify({
+                    "error": "挑战未完成",
+                    "message": f"您今天只完成了 {actual_minutes} 分钟{exercise_name}，还需要 {max(0, target_minutes - actual_minutes)} 分钟才能完成挑战",
+                    "actual": actual_value,
+                    "target": target_value,
+                    "completed": False
+                }), 400
+            else:
+                return jsonify({
+                    "error": "挑战未完成",
+                    "message": "您还没有完成所有挑战目标",
+                    "completed": False
+                }), 400
+        
+        # 验证通过，记录完成
+        success = complete_challenge(user_id, challenge_id)
+        
+        if success:
+            logger.info(f"✅ 用户 {user_id} 完成挑战 {challenge_id}")
+            
+            # 检查挑战相关成就
+            try:
+                check_achievements(user_id)
+            except Exception as e:
+                logger.warning(f"检查成就失败: {str(e)}")
+            
+            return jsonify({
+                "message": "挑战完成成功！",
+                "challenge_id": challenge_id,
+                "completed": True,
+                "actual": actual_value,
+                "target": target_value
+            })
+        else:
+            logger.info(f"⚠️  用户 {user_id} 挑战 {challenge_id} 已完成")
+            return jsonify({
+                "message": "挑战已完成",
+                "challenge_id": challenge_id,
+                "completed": True
+            })
+    except ValueError as e:
+        logger.error(f"❌ 完成挑战失败（验证错误）: {str(e)}")
+        return jsonify({"error": str(e)}), 400
+    except Exception as e:
+        logger.error(f"❌ 完成挑战失败: {str(e)}", exc_info=True)
+        db.session.rollback()
+        return jsonify({
+            "error": "完成挑战失败",
+            "message": str(e)
+        }), 500
+
+# 这个函数已经在前面更新过了，删除重复定义
+
+# ==================== 全局错误处理 ====================
+
+@app.errorhandler(404)
+def not_found(error):
+    """404错误处理"""
+    return jsonify({"error": "资源不存在"}), 404
+
+@app.errorhandler(500)
+def internal_error(error):
+    """500错误处理"""
+    logger.error(f"服务器内部错误: {str(error)}", exc_info=True)
+    db.session.rollback()
+    return jsonify({"error": "服务器内部错误"}), 500
+
+@app.errorhandler(400)
+def bad_request(error):
+    """400错误处理"""
+    return jsonify({"error": "请求参数错误"}), 400
+
+@app.errorhandler(401)
+def unauthorized(error):
+    """401错误处理"""
+    return jsonify({"error": "未授权访问"}), 401
+
+@app.errorhandler(SQLAlchemyError)
+def handle_db_exception(error):
+    """数据库异常处理"""
+    logger.error(f"数据库错误: {str(error)}", exc_info=True)
+    db.session.rollback()
+    return jsonify({"error": "数据库操作失败"}), 500
+
+@app.errorhandler(Exception)
+def handle_exception(error):
+    """全局异常处理"""
+    logger.error(f"未处理的异常: {str(error)}", exc_info=True)
+    db.session.rollback()
+    return jsonify({"error": "服务器错误"}), 500
+
+# ==================== 健康检查 ====================
+
+@app.route('/api/health', methods=['GET'])
+def health_check():
+    """健康检查接口"""
+    try:
+        # 检查数据库连接
+        db.session.execute(db.text('SELECT 1'))
+        return jsonify({
+            "status": "healthy",
+            "database": "connected",
+            "timestamp": datetime.now().isoformat()
+        }), 200
+    except Exception as e:
+        logger.error(f"健康检查失败: {str(e)}")
+        return jsonify({
+            "status": "unhealthy",
+            "database": "disconnected",
+            "error": str(e),
+            "timestamp": datetime.now().isoformat()
+        }), 503
+
 if __name__ == '__main__':
+    # 启动时检查数据库连接
+    try:
+        with app.app_context():
+            db.session.execute(db.text('SELECT 1'))
+            db_type = "PostgreSQL" if "postgresql" in app.config['SQLALCHEMY_DATABASE_URI'] or "postgres" in app.config['SQLALCHEMY_DATABASE_URI'] else "SQLite"
+            logger.info(f"✅ 数据库连接正常 ({db_type})")
+    except Exception as e:
+        logger.error(f"❌ 数据库连接失败: {e}")
+        db_type = "PostgreSQL" if "postgresql" in app.config['SQLALCHEMY_DATABASE_URI'] or "postgres" in app.config['SQLALCHEMY_DATABASE_URI'] else "SQLite"
+        if db_type == "PostgreSQL":
+            logger.error("💡 请确保PostgreSQL已启动并配置正确")
+        else:
+            logger.error("💡 SQLite数据库文件将自动创建")
+    
     app.run(debug=True, host='0.0.0.0', port=8000) 

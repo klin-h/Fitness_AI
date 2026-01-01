@@ -38,10 +38,14 @@ const CameraView: React.FC<CameraViewProps> = ({
         {/* 姿态检测画布叠加层 */}
         <canvas
           ref={canvasRef}
-          className="pose-overlay"
-          width={640}
-          height={480}
-          style={{ transform: 'scaleX(-1)' }}
+          className="absolute top-0 left-0 pointer-events-none"
+          style={{ 
+            transform: 'scaleX(-1)', // 镜像翻转以匹配video
+            width: '100%',
+            height: '100%',
+            objectFit: 'cover',
+            zIndex: 10 // 确保canvas在video之上
+          }}
         />
         
         {/* 状态指示器 */}
@@ -93,4 +97,4 @@ const CameraView: React.FC<CameraViewProps> = ({
   );
 };
 
-export default CameraView; 
+export default CameraView;
