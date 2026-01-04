@@ -1778,19 +1778,33 @@ def chat_with_coach():
     }
     
     try:
-        response = requests.post(url, headers=headers, json=payload, timeout=30)
-        response.raise_for_status()
+        response = requests.post(url, headers=headers, json=payload, timeout=60) # 增加超时时间到60秒
+        
+        # 检查非200响应
+        if response.status_code != 200:
+            error_detail = response.text
+            print(f"❌ [Chat] AI API错误 ({response.status_code}): {error_detail}")
+            return jsonify({
+                "error": "AI服务响应错误", 
+                "status_code": response.status_code,
+                "details": error_detail
+            }), 502
+
         result = response.json()
         
         if 'choices' in result and len(result['choices']) > 0:
             ai_reply = result['choices'][0]['message']['content']
             return jsonify({"reply": ai_reply})
         else:
-            return jsonify({"error": "AI未返回有效回复"}), 500
+            print(f"❌ [Chat] AI响应格式异常: {result}")
+            return jsonify({"error": "AI未返回有效回复", "raw_response": result}), 500
             
+    except requests.exceptions.Timeout:
+        print("❌ [Chat] AI请求超时")
+        return jsonify({"error": "AI思考时间过长，请重试"}), 504
     except Exception as e:
-        print(f"❌ [Chat] AI调用失败: {e}")
-        return jsonify({"error": "AI服务暂时不可用"}), 500
+        print(f"❌ [Chat] AI调用失败: {str(e)}")
+        return jsonify({"error": "AI服务暂时不可用", "details": str(e)}), 500
 
 @app.route('/api/ai/generate-plan', methods=['POST'])
 @require_auth
