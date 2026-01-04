@@ -114,9 +114,10 @@ const Profile: React.FC = () => {
       if (response.reply) {
         setChatHistory(prev => [...prev, { role: 'assistant', content: response.reply }]);
       }
-    } catch (err) {
+    } catch (err: any) {
       console.error("AI Chat Error:", err);
-      setChatHistory(prev => [...prev, { role: 'assistant', content: '抱歉，我现在有点累，请稍后再试。' }]);
+      const errorMsg = err.message || '未知错误';
+      setChatHistory(prev => [...prev, { role: 'assistant', content: `(连接错误: ${errorMsg}) 抱歉，请稍后再试。` }]);
     } finally {
       setChatLoading(false);
     }

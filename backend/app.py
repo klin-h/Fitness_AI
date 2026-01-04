@@ -1763,8 +1763,13 @@ def chat_with_coach():
             pass
             
     if not api_key or api_key == 'your_zhipu_api_key_here':
+        print("❌ [Chat] API Key未配置")
         return jsonify({"error": "AI服务未配置"}), 503
         
+    # 打印Key的掩码以便调试 (只显示前4位和后4位)
+    masked_key = f"{api_key[:4]}...{api_key[-4:]}" if len(api_key) > 8 else "***"
+    print(f"🔑 [Chat] 使用API Key: {masked_key}")
+
     url = "https://api.siliconflow.cn/v1/chat/completions"
     headers = {
         "Authorization": f"Bearer {api_key}",
