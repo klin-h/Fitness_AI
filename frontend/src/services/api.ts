@@ -53,8 +53,11 @@ export const api = {
           window.location.href = '/login';
         }
       }
-      const error = await response.json().catch(() => ({ error: '请求失败' }));
-      throw new Error(error.error || '请求失败');
+      const errorData = await response.json().catch(() => ({ error: '请求失败' }));
+      const errorMessage = errorData.details 
+        ? `${errorData.error} (${errorData.details})` 
+        : (errorData.error || '请求失败');
+      throw new Error(errorMessage);
     }
 
     return response.json();
