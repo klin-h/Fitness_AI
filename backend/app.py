@@ -1171,16 +1171,9 @@ def call_zhipu_ai_api(prompt, max_retries=2):
     }
     
     # 备选模型列表（按优先级排序）
-    # 硅基流动免费模型列表：
-    # 1. THUDM/glm-4-9b-chat (智谱GLM-4-9B)
-    # 2. THUDM/chatglm3-6b (智谱ChatGLM3-6B)
-    # 3. Qwen/Qwen2.5-7B-Instruct (通义千问2.5-7B)
-    # 4. deepseek-ai/DeepSeek-V3 (DeepSeek V3)
+    # 仅保留智谱(THUDM)系列模型
     models = [
-        "THUDM/glm-4-9b-chat",
-        "THUDM/chatglm3-6b",
-        "Qwen/Qwen2.5-7B-Instruct",
-        "deepseek-ai/DeepSeek-V3"
+        "THUDM/glm-4-9b-chat"
     ]
     
     last_error = "unknown_error"
@@ -1813,16 +1806,10 @@ def chat_with_coach():
     
     # 定义模型列表：主模型和备用模型
     # 如果主模型忙，自动切换到备用模型
-    # 硅基流动免费模型列表：
-    # 1. THUDM/glm-4-9b-chat (智谱GLM-4-9B)
-    # 2. THUDM/chatglm3-6b (智谱ChatGLM3-6B)
-    # 3. Qwen/Qwen2.5-7B-Instruct (通义千问2.5-7B)
-    # 4. deepseek-ai/DeepSeek-V3 (DeepSeek V3)
+    # 仅保留智谱(THUDM)系列模型，以符合用户要求
     models_to_try = [
-        "THUDM/glm-4-9b-chat",
-        "THUDM/chatglm3-6b",
-        "Qwen/Qwen2.5-7B-Instruct",
-        "deepseek-ai/DeepSeek-V3"
+        "THUDM/glm-4-9b-chat",      # 首选：标准版
+        "THUDM/glm-4-9b-chat-1m",   # 备选：1M长上下文版
     ]
     
     import time
