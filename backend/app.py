@@ -1769,8 +1769,7 @@ def chat_with_coach():
     # 使用官方SDK或直接HTTP请求
     # 优先使用 glm-4-flash (免费且速度快)
     models_to_try = [
-        "glm-4-flash",
-        "glm-4"
+        "glm-4-flash"
     ]
     
     import time
