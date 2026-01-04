@@ -159,16 +159,9 @@ export const usePoseDetection = (exerciseType: string = 'squat') => {
       // 使用多个备用 CDN 镜像，提高加载成功率
       const pose = new Pose({
         locateFile: (file) => {
-          // 优先尝试本地文件（如果已复制到 public/mediapipe 目录）
-          // 如果本地文件不存在，浏览器会自动回退到 CDN
-          const localPath = `/mediapipe/${file}`;
-          
-          // 备用 CDN 镜像（按优先级排序）
-          const cdnPath = `https://unpkg.com/@mediapipe/pose@0.5.1675469404/${file}`;
-          
-          // 如果本地文件存在，使用本地文件；否则使用 CDN
-          // 注意：需要先运行复制命令将文件复制到 public/mediapipe 目录
-          return process.env.NODE_ENV === 'production' ? localPath : cdnPath;
+          // 直接使用可靠的 CDN 地址，避免 Vercel 路由问题
+          // 使用 jsdelivr CDN，它通常比 unpkg 更稳定且支持自动回退
+          return `https://cdn.jsdelivr.net/npm/@mediapipe/pose@0.5.1675469404/${file}`;
         }
       });
 
