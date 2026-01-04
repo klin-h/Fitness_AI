@@ -2,7 +2,8 @@ import React, { useState, useEffect } from 'react';
 import { useAuth } from '../contexts/AuthContext';
 import { useNavigate, useSearchParams } from 'react-router-dom';
 import { api } from '../services/api';
-import { User, Lock, Mail, UserCircle, Save, LogOut, ArrowLeft, Edit2, History, Target, Sparkles } from 'lucide-react';
+import { User, Lock, Mail, UserCircle, Save, LogOut, ArrowLeft, Edit2, History, Target, Sparkles, BarChart2 } from 'lucide-react';
+import DataVisualization from './DataVisualization';
 
 const Profile: React.FC = () => {
   const { user, token, logout, updateUser } = useAuth();
@@ -10,9 +11,9 @@ const Profile: React.FC = () => {
   const [searchParams] = useSearchParams();
   
   // 从URL参数获取初始标签页
-  const tabFromUrl = searchParams.get('tab') as 'profile' | 'password' | 'history' | 'plan' | null;
-  const [activeTab, setActiveTab] = useState<'profile' | 'password' | 'history' | 'plan'>(
-    tabFromUrl && ['profile', 'password', 'history', 'plan'].includes(tabFromUrl) ? tabFromUrl : 'profile'
+  const tabFromUrl = searchParams.get('tab') as 'profile' | 'password' | 'history' | 'plan' | 'stats' | null;
+  const [activeTab, setActiveTab] = useState<'profile' | 'password' | 'history' | 'plan' | 'stats'>(
+    tabFromUrl && ['profile', 'password', 'history', 'plan', 'stats'].includes(tabFromUrl) ? tabFromUrl : 'profile'
   );
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');

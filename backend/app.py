@@ -198,6 +198,92 @@ def submit_exercise_data(session_id):
         }
     })
 
+from datetime import datetime, timedelta
+from sqlalchemy import func
+
+@app.route('/api/user/stats/weekly', methods=['GET'])
+def get_weekly_stats():
+    """获取用户本周运动统计数据"""
+    auth_header = request.headers.get('Authorization')
+    if not auth_header:
+        return jsonify({"error": "Missing Authorization header"}), 401
+    
+    token = auth_header.split(" ")[1]
+    token_obj = Token.query.get(token)
+    if not token_obj or token_obj.expire_time < datetime.now():
+        return jsonify({"error": "Invalid or expired token"}), 401
+        
+    user_id = token_obj.user_id
+    
+    # 计算本周起始日期（周一）
+    today = datetime.now().date()
+    start_of_week = today - timedelta(days=today.weekday())
+    end_of_week = start_of_week + timedelta(days=6)
+    
+    # 查询本周的所有会话
+    sessions = Session.query.filter(
+        Session.user_id == user_id,
+        Session.start_time >= datetime.combine(start_of_week, datetime.min.time()),
+        Session.start_time <= datetime.combine(end_of_week, datetime.max.time())
+    ).all()
+    
+    # 初始化每日数据
+    daily_stats = {
+        (start_of_week + timedelta(days=i)).strftime('%Y-%m-%d'): {"count": 0, "duration": 0}
+        for i in range(7)
+    }
+    
+    # 填充数据
+    for session in sessions:
+        date_str = session.start_time.strftime('%Y-%m-%d')
+        if date_str in daily_stats:
+            daily_stats[date_str]["count"] += session.total_count
+            if session.end_time:
+                duration = (session.end_time - session.start_time).total_seconds() / 60  # 分钟
+                daily_stats[date_str]["duration"] += duration
+                
+    # 格式化返回数据
+    result = [
+        {
+            "date": date,
+            "day": (datetime.strptime(date, '%Y-%m-%d')).strftime('%a'), # 周几
+            "count": stats["count"],
+            "duration": round(stats["duration"], 1)
+        }
+        for date, stats in daily_stats.items()
+    ]
+    
+    return jsonify(result)
+
+@app.route('/api/user/stats/exercise-distribution', methods=['GET'])
+def get_exercise_distribution():
+    """获取用户运动类型分布"""
+    auth_header = request.headers.get('Authorization')
+    if not auth_header:
+        return jsonify({"error": "Missing Authorization header"}), 401
+    
+    token = auth_header.split(" ")[1]
+    token_obj = Token.query.get(token)
+    if not token_obj or token_obj.expire_time < datetime.now():
+        return jsonify({"error": "Invalid or expired token"}), 401
+        
+    user_id = token_obj.user_id
+    
+    # 聚合查询各种运动类型的总次数
+    stats = db.session.query(
+        Session.exercise_type,
+        func.sum(Session.total_count).label('total_count')
+    ).filter(
+        Session.user_id == user_id
+    ).group_by(Session.exercise_type).all()
+    
+    result = [
+        {"name": stat.exercise_type, "value": stat.total_count or 0}
+        for stat in stats
+    ]
+    
+    return jsonify(result)
+
 @app.route('/api/session/<session_id>/end', methods=['POST'])
 def end_session(session_id):
     """
