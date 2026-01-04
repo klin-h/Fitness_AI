@@ -1170,17 +1170,44 @@ def call_zhipu_ai_api(prompt, max_retries=2):
         "max_tokens": 1000
     }
     
+    # 备选模型列表（按优先级排序）
+    # 硅基流动免费模型列表：
+    # 1. THUDM/glm-4-9b-chat (智谱GLM-4-9B)
+    # 2. THUDM/chatglm3-6b (智谱ChatGLM3-6B)
+    # 3. Qwen/Qwen2.5-7B-Instruct (通义千问2.5-7B)
+    # 4. deepseek-ai/DeepSeek-V3 (DeepSeek V3)
+    models = [
+        "THUDM/glm-4-9b-chat",
+        "THUDM/chatglm3-6b",
+        "Qwen/Qwen2.5-7B-Instruct",
+        "deepseek-ai/DeepSeek-V3"
+    ]
+    
     last_error = "unknown_error"
     
     # 重试机制
     for attempt in range(max_retries + 1):
+        # 轮询使用不同的模型，增加成功率
+        current_model = models[attempt % len(models)]
+        
         try:
             if attempt > 0:
-                print(f"🔄 [AI] 第 {attempt + 1} 次尝试...")
+                print(f"🔄 [AI] 第 {attempt + 1} 次尝试 (切换模型: {current_model})...")
             
-            print(f"🌐 [AI] 发送请求到: {url}")
+            data["model"] = current_model
+            print(f"🌐 [AI] 发送请求到: {url} (Model: {current_model})")
+            
             # 增加超时时间：连接超时5秒，读取超时30秒
             response = requests.post(url, headers=headers, json=data, timeout=(5, 30))
+            
+            # 特殊处理 400 错误 (Model does not exist)
+            if response.status_code == 400:
+                error_data = response.json()
+                if error_data.get('code') == 20012: # Model does not exist
+                    print(f"❌ [AI] 模型 {current_model} 不存在或不可用，尝试下一个模型...")
+                    last_error = "model_not_exist"
+                    continue
+            
             response.raise_for_status()
             
             result = response.json()
@@ -1193,7 +1220,8 @@ def call_zhipu_ai_api(prompt, max_retries=2):
             else:
                 print(f"❌ [AI] API返回格式异常: {result}")
                 last_error = "api_error"
-                return None, "api_error"
+                # 如果是格式异常，可能模型有问题，尝试下一个
+                continue
                 
         except requests.exceptions.Timeout as e:
             print(f"⏱️  [AI] 请求超时 (尝试 {attempt + 1}/{max_retries + 1}): {e}")
@@ -1785,11 +1813,16 @@ def chat_with_coach():
     
     # 定义模型列表：主模型和备用模型
     # 如果主模型忙，自动切换到备用模型
-    # 仅使用智谱(THUDM)系列的免费模型，以符合项目文档要求
-    # 移除已弃用的 chatglm3-6b，使用 GLM-4 的不同版本作为备选
+    # 硅基流动免费模型列表：
+    # 1. THUDM/glm-4-9b-chat (智谱GLM-4-9B)
+    # 2. THUDM/chatglm3-6b (智谱ChatGLM3-6B)
+    # 3. Qwen/Qwen2.5-7B-Instruct (通义千问2.5-7B)
+    # 4. deepseek-ai/DeepSeek-V3 (DeepSeek V3)
     models_to_try = [
-        "THUDM/glm-4-9b-chat",      # 首选：标准版
-        "THUDM/glm-4-9b-chat-1m",   # 备选：1M长上下文版 (通常也是免费的)
+        "THUDM/glm-4-9b-chat",
+        "THUDM/chatglm3-6b",
+        "Qwen/Qwen2.5-7B-Instruct",
+        "deepseek-ai/DeepSeek-V3"
     ]
     
     import time
@@ -1823,6 +1856,16 @@ def chat_with_coach():
             print(f"⚠️ [Chat] 模型 {model} 调用失败 ({response.status_code}): {error_detail}")
             last_error = error_detail
             
+            # 特殊处理 400 错误 (Model does not exist)
+            if response.status_code == 400:
+                try:
+                    error_json = response.json()
+                    if error_json.get('code') == 20012: # Model does not exist
+                        print(f"❌ [Chat] 模型 {model} 不存在或不可用，尝试下一个模型...")
+                        continue
+                except:
+                    pass
+
             # 如果是 50603 (System busy) 或 429 (Rate limit)，等待一下再试下一个
             if response.status_code in [429, 500, 502, 503, 504] or "50603" in error_detail:
                 time.sleep(1) # 简单的退避
