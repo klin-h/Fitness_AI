@@ -55,6 +55,7 @@ class UserProfile(db.Model):
     user_id = db.Column(db.String(100), db.ForeignKey('users.user_id'), unique=True, nullable=False)
     height = db.Column(db.Float)
     weight = db.Column(db.Float)
+    body_fat = db.Column(db.Float)  # 体脂率
     age = db.Column(db.Integer)
     gender = db.Column(db.String(20))
     updated_at = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
@@ -63,6 +64,7 @@ class UserProfile(db.Model):
         return {
             'height': self.height,
             'weight': self.weight,
+            'body_fat': self.body_fat,
             'age': self.age,
             'gender': self.gender
         }
@@ -86,6 +88,8 @@ class Plan(db.Model):
     user_id = db.Column(db.String(100), db.ForeignKey('users.user_id'), unique=True, nullable=False)
     daily_goals = db.Column(db.Text)  # JSON字符串
     weekly_goals = db.Column(db.Text)  # JSON字符串
+    custom_goal = db.Column(db.String(50))  # 用户自定义目标 (weight_loss, muscle_gain, etc.)
+    ai_advice = db.Column(db.Text)  # AI生成的建议对话
     created_at = db.Column(db.DateTime, default=datetime.utcnow)
     updated_at = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
     
@@ -93,6 +97,8 @@ class Plan(db.Model):
         return {
             'daily_goals': json.loads(self.daily_goals) if self.daily_goals else {},
             'weekly_goals': json.loads(self.weekly_goals) if self.weekly_goals else {},
+            'custom_goal': self.custom_goal,
+            'ai_advice': self.ai_advice,
             'created_at': self.created_at.isoformat() if self.created_at else None,
             'updated_at': self.updated_at.isoformat() if self.updated_at else None
         }

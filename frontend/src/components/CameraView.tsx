@@ -49,7 +49,7 @@ const CameraView: React.FC<CameraViewProps> = ({
         />
         
         {/* 状态指示器 */}
-        <div className="absolute top-4 left-4">
+        <div className="absolute top-4 left-4 z-20">
           <div className={`flex items-center space-x-2 px-3 py-1 rounded-full text-sm font-medium ${
             isActive ? 'bg-green-500 text-white' : 'bg-gray-500 text-white'
           }`}>
@@ -59,14 +59,14 @@ const CameraView: React.FC<CameraViewProps> = ({
         </div>
 
         {/* 动作反馈 */}
-        <div className="absolute top-4 right-4 bg-white border border-gray-200 text-gray-900 px-4 py-2 rounded-lg shadow-md">
+        <div className="absolute top-4 right-4 bg-white border border-gray-200 text-gray-900 px-4 py-2 rounded-lg shadow-md z-20">
           <div className={`text-lg font-bold ${exerciseStats.isCorrect ? 'text-green-600' : 'text-yellow-600'}`}>
             {exerciseStats.feedback}
           </div>
         </div>
 
         {/* 分数显示 */}
-        <div className="absolute bottom-4 right-4 bg-blue-600 text-white px-4 py-2 rounded-lg shadow-md">
+        <div className="absolute bottom-4 right-4 bg-blue-600 text-white px-4 py-2 rounded-lg shadow-md z-20">
           <div className="text-2xl font-bold">分数: {exerciseStats.score}</div>
         </div>
       </div>

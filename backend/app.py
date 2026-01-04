@@ -26,7 +26,18 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 # 加载环境变量
-load_dotenv()
+# 强制加载当前文件所在目录下的 .env 文件
+from pathlib import Path
+env_path = Path(__file__).parent / '.env'
+load_dotenv(dotenv_path=env_path)
+
+# 调试：打印API Key状态（仅打印前几位，保护隐私）
+api_key = os.getenv('ZHIPU_API_KEY')
+if api_key:
+    masked_key = api_key[:5] + '*' * (len(api_key) - 5) if len(api_key) > 5 else '*****'
+    print(f"🔑 [Config] ZHIPU_API_KEY loaded: {masked_key}")
+else:
+    print("⚠️ [Config] ZHIPU_API_KEY not found in environment variables")
 
 app = Flask(__name__)
 # 配置 CORS，允许所有来源和所有方法（开发环境）
@@ -63,7 +74,7 @@ else:
     }
 
 # 初始化数据库
-from database import db, init_db, Session, User, UserProfile, Plan, UserAchievement, Checkin, ChallengeCompletion
+from database import db, init_db, Session, User, UserProfile, Plan, UserAchievement, Checkin, ChallengeCompletion, Token
 db.init_app(app)
 
 # 导入数据库适配层
@@ -132,10 +143,16 @@ def require_auth(f):
     def decorated_function(*args, **kwargs):
         # OPTIONS 预检请求不需要认证
         if request.method == 'OPTIONS':
-            return jsonify({}), 200
+            response = jsonify({})
+            # 显式添加CORS头，防止某些情况下CORS中间件未生效
+            response.headers.add('Access-Control-Allow-Origin', '*')
+            response.headers.add('Access-Control-Allow-Headers', 'Content-Type,Authorization')
+            response.headers.add('Access-Control-Allow-Methods', 'GET,PUT,POST,DELETE,OPTIONS')
+            return response, 200
         
         token = request.headers.get('Authorization')
         if not token:
+            print("❌ [Auth] 未提供认证token")
             return jsonify({"error": "未提供认证token"}), 401
         
         # 移除 "Bearer " 前缀（如果存在）
@@ -144,6 +161,7 @@ def require_auth(f):
         
         user_id = verify_token(token)
         if not user_id:
+            print(f"❌ [Auth] 无效或过期的token: {token[:10]}...")
             return jsonify({"error": "无效或过期的token"}), 401
         
         request.user_id = user_id
@@ -393,18 +411,10 @@ from datetime import datetime, timedelta
 from sqlalchemy import func
 
 @app.route('/api/user/stats/weekly', methods=['GET'])
+@require_auth
 def get_weekly_stats():
     """获取用户本周运动统计数据"""
-    auth_header = request.headers.get('Authorization')
-    if not auth_header:
-        return jsonify({"error": "Missing Authorization header"}), 401
-    
-    token = auth_header.split(" ")[1]
-    token_obj = Token.query.get(token)
-    if not token_obj or token_obj.expire_time < datetime.now():
-        return jsonify({"error": "Invalid or expired token"}), 401
-        
-    user_id = token_obj.user_id
+    user_id = request.user_id
     
     # 计算本周起始日期（周一）
     today = datetime.now().date()
@@ -447,18 +457,10 @@ def get_weekly_stats():
     return jsonify(result)
 
 @app.route('/api/user/stats/exercise-distribution', methods=['GET'])
+@require_auth
 def get_exercise_distribution():
     """获取用户运动类型分布"""
-    auth_header = request.headers.get('Authorization')
-    if not auth_header:
-        return jsonify({"error": "Missing Authorization header"}), 401
-    
-    token = auth_header.split(" ")[1]
-    token_obj = Token.query.get(token)
-    if not token_obj or token_obj.expire_time < datetime.now():
-        return jsonify({"error": "Invalid or expired token"}), 401
-        
-    user_id = token_obj.user_id
+    user_id = request.user_id
     
     # 聚合查询各种运动类型的总次数
     stats = db.session.query(
@@ -895,7 +897,7 @@ def change_password():
         # 验证旧密码
         if user.password_hash != hash_password(old_password):
             logger.warning(f"密码修改失败: 旧密码错误 - {user_id}")
-            return jsonify({"error": "旧密码错误"}), 401
+            return jsonify({"error": "旧密码错误"}), 400
         
         # 更新密码
         user.password_hash = hash_password(new_password)
@@ -983,6 +985,8 @@ def update_user_profile():
             user.profile.age = profile_data['age']
         if 'gender' in profile_data:
             user.profile.gender = profile_data['gender']
+        if 'body_fat' in profile_data:
+            user.profile.body_fat = profile_data['body_fat']
     
     db.session.commit()
     
@@ -1104,25 +1108,47 @@ def call_zhipu_ai_api(prompt, max_retries=2):
         max_retries: 最大重试次数
     
     返回:
-        AI生成的文本，如果失败则返回None
+        (ai_content, error_code)
+        ai_content: AI生成的文本，如果失败则为None
+        error_code: 错误代码 (None, 'missing_key', 'timeout', 'connection_error', 'api_error', 'unknown_error')
     """
     api_key = os.getenv('ZHIPU_API_KEY')
     
-    # 如果没有配置API Key，返回None（将使用规则引擎）
+    # 增强的Key获取逻辑：如果环境变量为空，尝试直接读取文件
+    if not api_key or api_key == 'your_zhipu_api_key_here':
+        try:
+            from pathlib import Path
+            env_path = Path(__file__).parent / '.env'
+            if env_path.exists():
+                with open(env_path, 'r', encoding='utf-8') as f:
+                    for line in f:
+                        if line.strip().startswith('ZHIPU_API_KEY='):
+                            file_key = line.split('=', 1)[1].strip()
+                            if file_key and file_key != 'your_zhipu_api_key_here':
+                                api_key = file_key
+                                print(f"⚠️ [AI] 从.env文件直接读取到API Key")
+                                break
+        except Exception as e:
+            print(f"❌ [AI] 读取.env文件失败: {e}")
+
+    # 如果仍然没有配置API Key，返回None（将使用规则引擎）
     if not api_key or api_key == 'your_zhipu_api_key_here':
         print("⚠️  [AI] API Key未配置，将使用规则引擎")
-        return None
+        # 打印当前环境变量以便调试
+        print(f"🔍 [Debug] Current Env Keys: {[k for k in os.environ.keys() if 'API' in k]}")
+        return None, "missing_key"
     
-    print(f"🤖 [AI] 正在调用智谱AI API...")
+    print(f"🤖 [AI] 正在调用硅基流动API (GLM-4-9B)...")
+    print(f"🔑 [AI] API Key状态: {'已配置' if api_key else '未配置'} (长度: {len(api_key)})")
     print(f"📝 [AI] 提示词长度: {len(prompt)} 字符")
     
-    url = "https://open.bigmodel.cn/api/paas/v4/chat/completions"
+    url = "https://api.siliconflow.cn/v1/chat/completions"
     headers = {
         "Authorization": f"Bearer {api_key}",
         "Content-Type": "application/json"
     }
     data = {
-        "model": "glm-4",  # 使用GLM-4模型
+        "model": "THUDM/glm-4-9b-chat",  # 使用硅基流动免费版GLM-4模型
         "messages": [
             {
                 "role": "system",
@@ -1136,6 +1162,8 @@ def call_zhipu_ai_api(prompt, max_retries=2):
         "temperature": 0.7,
         "max_tokens": 1000
     }
+    
+    last_error = "unknown_error"
     
     # 重试机制
     for attempt in range(max_retries + 1):
@@ -1154,13 +1182,15 @@ def call_zhipu_ai_api(prompt, max_retries=2):
                 print(f"✅ [AI] API调用成功！")
                 print(f"📄 [AI] AI返回内容长度: {len(ai_content)} 字符")
                 print(f"📄 [AI] AI返回内容预览: {ai_content[:200]}...")
-                return ai_content
+                return ai_content, None
             else:
                 print(f"❌ [AI] API返回格式异常: {result}")
-                return None
+                last_error = "api_error"
+                return None, "api_error"
                 
         except requests.exceptions.Timeout as e:
             print(f"⏱️  [AI] 请求超时 (尝试 {attempt + 1}/{max_retries + 1}): {e}")
+            last_error = "timeout"
             if attempt < max_retries:
                 import time
                 wait_time = (attempt + 1) * 2  # 递增等待时间
@@ -1168,10 +1198,10 @@ def call_zhipu_ai_api(prompt, max_retries=2):
                 time.sleep(wait_time)
             else:
                 print(f"❌ [AI] 所有重试均失败，网络可能不稳定或服务器响应慢")
-                return None
                 
         except requests.exceptions.ConnectionError as e:
             print(f"🔌 [AI] 连接错误 (尝试 {attempt + 1}/{max_retries + 1}): {e}")
+            last_error = "connection_error"
             if attempt < max_retries:
                 import time
                 wait_time = (attempt + 1) * 2
@@ -1179,25 +1209,26 @@ def call_zhipu_ai_api(prompt, max_retries=2):
                 time.sleep(wait_time)
             else:
                 print(f"❌ [AI] 无法连接到服务器，请检查网络连接")
-                return None
                 
         except requests.exceptions.RequestException as e:
             print(f"❌ [AI] 网络请求失败 (尝试 {attempt + 1}/{max_retries + 1}): {e}")
+            last_error = "api_error"
             if attempt < max_retries:
                 import time
                 wait_time = (attempt + 1) * 2
                 print(f"⏳ [AI] 等待 {wait_time} 秒后重试...")
                 time.sleep(wait_time)
             else:
-                return None
+                pass
                 
         except Exception as e:
             print(f"❌ [AI] API调用失败: {e}")
             import traceback
             traceback.print_exc()
-            return None
+            last_error = "unknown_error"
+            return None, "unknown_error"
     
-    return None
+    return None, last_error
 
 def parse_ai_response(ai_text, height, weight, age, gender):
     """
@@ -1230,6 +1261,16 @@ def parse_ai_response(ai_text, height, weight, age, gender):
     
     print(f"🔍 [AI] 开始解析AI响应...")
     
+    # --- 安全限制函数 ---
+    def clamp(value, min_val, max_val):
+        return max(min_val, min(value, max_val))
+        
+    # 设定合理的上限（防止AI生成"200个深蹲"这种离谱数据）
+    MAX_SQUAT = 60
+    MAX_PUSHUP = 50
+    MAX_PLANK = 120
+    MAX_JACK = 100
+    
     # 改进的解析逻辑：优先匹配"每组X次"或"X次"，如果没有则匹配"X组"
     # 深蹲：匹配"每组(\d+)次"或"(\d+)次"或"(\d+)组"
     squat_patterns = [
@@ -1247,8 +1288,12 @@ def parse_ai_response(ai_text, height, weight, age, gender):
                 each_match = re.search(r'深蹲[：:].*?每组\s*(\d+)\s*次', ai_text, re.IGNORECASE)
                 if each_match:
                     value = int(each_match.group(1)) * value  # 组数 * 每组次数
+            
+            # 安全限制
+            original_value = value
+            value = clamp(value, 10, MAX_SQUAT)
             daily_goals["squat"] = value
-            print(f"✅ [AI] 解析深蹲: {value}次")
+            print(f"✅ [AI] 解析深蹲: {original_value}次 -> 修正为: {value}次")
             break
     
     # 俯卧撑
@@ -1266,8 +1311,12 @@ def parse_ai_response(ai_text, height, weight, age, gender):
                 each_match = re.search(r'俯卧撑[：:].*?每组\s*(\d+)\s*次', ai_text, re.IGNORECASE)
                 if each_match:
                     value = int(each_match.group(1)) * value
+            
+            # 安全限制
+            original_value = value
+            value = clamp(value, 5, MAX_PUSHUP)
             daily_goals["pushup"] = value
-            print(f"✅ [AI] 解析俯卧撑: {value}次")
+            print(f"✅ [AI] 解析俯卧撑: {original_value}次 -> 修正为: {value}次")
             break
     
     # 平板支撑（单位是秒）
@@ -1285,8 +1334,12 @@ def parse_ai_response(ai_text, height, weight, age, gender):
                 each_match = re.search(r'平板支撑[：:].*?每组\s*(\d+)\s*秒', ai_text, re.IGNORECASE)
                 if each_match:
                     value = int(each_match.group(1))  # 平板支撑通常取每组秒数
+            
+            # 安全限制
+            original_value = value
+            value = clamp(value, 20, MAX_PLANK)
             daily_goals["plank"] = value
-            print(f"✅ [AI] 解析平板支撑: {value}秒")
+            print(f"✅ [AI] 解析平板支撑: {original_value}秒 -> 修正为: {value}秒")
             break
     
     # 开合跳
@@ -1304,8 +1357,12 @@ def parse_ai_response(ai_text, height, weight, age, gender):
                 each_match = re.search(r'开合跳[：:].*?每组\s*(\d+)\s*次', ai_text, re.IGNORECASE)
                 if each_match:
                     value = int(each_match.group(1)) * value
+            
+            # 安全限制
+            original_value = value
+            value = clamp(value, 15, MAX_JACK)
             daily_goals["jumping_jack"] = value
-            print(f"✅ [AI] 解析开合跳: {value}次")
+            print(f"✅ [AI] 解析开合跳: {original_value}次 -> 修正为: {value}次")
             break
     
     # 每周运动次数
@@ -1346,15 +1403,79 @@ def parse_ai_response(ai_text, height, weight, age, gender):
             print(f"✅ [AI] 解析每周运动时长: {weekly_goals['total_duration']}分钟")
             break
     
-    # 提取建议（按段落分割，过滤掉标题和数字行）
-    lines = [line.strip() for line in ai_text.split('\n') if line.strip()]
-    for line in lines:
-        # 跳过标题、数字行、空行
-        if (len(line) > 20 and 
-            not re.match(r'^[#*\-•\d\s]+$', line) and 
-            not re.match(r'^[###\s]+', line) and
-            '建议' not in line and '目标' not in line):
-            suggestions.append(line)
+    # 提取AI教练建议
+    ai_advice = ""
+    
+    # 调试：打印原始文本的最后500个字符，看看AI到底返回了什么
+    print(f"🔍 [AI Debug] 原始响应末尾预览:\n{ai_text[-500:]}")
+
+    # 策略1：标准匹配 "教练建议"
+    advice_match = re.search(r'###\s*教练建议\s*(.*?)(?=###|$)', ai_text, re.DOTALL)
+    
+    # 策略2：兼容 "AI教练深度指导"
+    if not advice_match:
+        advice_match = re.search(r'###\s*AI教练深度指导\s*(.*?)(?=###|$)', ai_text, re.DOTALL)
+        
+    # 策略3：兼容 "AI教练寄语"
+    if not advice_match:
+        advice_match = re.search(r'###\s*AI教练寄语\s*(.*?)(?=###|$)', ai_text, re.DOTALL)
+        
+    # 策略4：兼容 "AI教练对话"
+    if not advice_match:
+        advice_match = re.search(r'###\s*AI教练对话\s*(.*?)(?=###|$)', ai_text, re.DOTALL)
+
+    # 策略5：寻找最后一个 "###" 标题之后的内容（通常是总结或寄语）
+    if not advice_match:
+        # 找到最后一个 ### 标题
+        last_header_match = list(re.finditer(r'###\s*(.*?)\n', ai_text))
+        if last_header_match:
+            last_header = last_header_match[-1]
+            # 如果最后一个标题包含 "指导"、"寄语"、"建议"、"总结" 等关键词
+            header_text = last_header.group(1)
+            if any(k in header_text for k in ['指导', '寄语', '建议', '总结', '话', 'Guide', 'Advice']):
+                start_pos = last_header.end()
+                ai_advice = ai_text[start_pos:].strip()
+                print(f"✅ [AI] 策略5匹配成功 (标题: {header_text}): {ai_advice[:20]}...")
+
+    if advice_match:
+        ai_advice = advice_match.group(1).strip()
+        print(f"✅ [AI] 精确匹配成功: {ai_advice[:20]}...")
+    elif not ai_advice:
+        # 策略6：实在找不到，尝试提取最后一段长文本
+        print(f"⚠️ [AI] 未找到明确标记，尝试提取最后一段长文本...")
+        paragraphs = [p.strip() for p in ai_text.split('\n\n') if len(p.strip()) > 50]
+        if paragraphs:
+            # 取最后一段，但要排除包含大量数字或列表项的段落
+            potential_advice = paragraphs[-1]
+            if not re.search(r'^\d+\.', potential_advice) and not re.search(r'^\-', potential_advice):
+                ai_advice = potential_advice
+                print(f"✅ [AI] 宽松匹配找到文本: {ai_advice[:20]}...")
+            else:
+                # 如果最后一段像列表，可能倒数第二段是建议
+                if len(paragraphs) > 1:
+                    ai_advice = paragraphs[-2]
+                    print(f"✅ [AI] 宽松匹配找到倒数第二段: {ai_advice[:20]}...")
+
+    # 提取专业建议
+    suggestions_match = re.search(r'### 专业建议\s*(.*?)(?=###|$)', ai_text, re.DOTALL)
+    if suggestions_match:
+        suggestions_text = suggestions_match.group(1).strip()
+        # 提取每一行作为建议
+        suggestions = [line.strip() for line in suggestions_text.split('\n') if line.strip() and (line.strip().startswith('-') or line.strip()[0].isdigit())]
+        # 去掉开头的序号或破折号
+        suggestions = [re.sub(r'^[\d\.\-\s]+', '', s) for s in suggestions]
+        print(f"✅ [AI] 解析专业建议: {len(suggestions)}条")
+    else:
+        # 旧的宽松解析逻辑
+        lines = [line.strip() for line in ai_text.split('\n') if line.strip()]
+        for line in lines:
+            # 跳过标题、数字行、空行
+            if (len(line) > 20 and 
+                not re.match(r'^[#*\-•\d\s]+$', line) and 
+                not re.match(r'^[###\s]+', line) and
+                '建议' not in line and '目标' not in line and '情感激励' not in line and 'AI教练对话' not in line and 'AI教练寄语' not in line and 'AI教练深度指导' not in line and
+                line not in ai_advice):
+                suggestions.append(line)
     
     suggestions = suggestions[:5]  # 最多5条建议
     
@@ -1367,10 +1488,11 @@ def parse_ai_response(ai_text, height, weight, age, gender):
         "daily_goals": daily_goals,
         "weekly_goals": weekly_goals,
         "suggestions": suggestions,
+        "ai_advice": ai_advice,
         "ai_response": ai_text
     }
 
-def ai_generate_fitness_plan(height, weight, age, gender):
+def ai_generate_fitness_plan(height, weight, age, gender, body_fat=None, custom_goal=None):
     """
     AI Agent: 根据用户生命体征生成个性化健身计划建议
     优先使用智谱AI API，如果失败则使用规则引擎
@@ -1380,6 +1502,8 @@ def ai_generate_fitness_plan(height, weight, age, gender):
         weight: 体重（kg）
         age: 年龄
         gender: 性别（male/female/other）
+        body_fat: 体脂率（%）
+        custom_goal: 自定义目标（如：减脂、增肌、塑形）
     
     返回:
         包含每日目标和每周目标的字典
@@ -1392,6 +1516,8 @@ def ai_generate_fitness_plan(height, weight, age, gender):
     gender_text = {"male": "男性", "female": "女性", "other": "其他"}.get(gender, "未知")
     age_text = f"{age}岁" if age else "未知"
     bmi_text = f"{round(bmi, 1)}" if bmi else "未知"
+    body_fat_text = f"{body_fat}%" if body_fat else "未知"
+    goal_text = custom_goal if custom_goal else "综合健康"
     
     prompt = f"""请根据以下用户信息，制定一份个性化的健身计划：
 
@@ -1399,36 +1525,36 @@ def ai_generate_fitness_plan(height, weight, age, gender):
 - 身高：{height}cm
 - 体重：{weight}kg
 - BMI：{bmi_text}
+- 体脂率：{body_fat_text}
 - 年龄：{age_text}
 - 性别：{gender_text}
 - 健身水平：{fitness_level}
+- 健身目标：{goal_text}
 
-请严格按照以下格式提供：
+请提供以下内容：
 
 ### 每日目标
-- 深蹲：XX次（直接写总次数，不要写"X组，每组X次"）
+- 深蹲：XX次（直接写总次数）
 - 俯卧撑：XX次（直接写总次数）
 - 平板支撑：XX秒（直接写总秒数）
 - 开合跳：XX次（直接写总次数）
 
 ### 每周目标
 - 总运动次数：X次
-- 总运动时长：X分钟（每周总时长）
+- 总运动时长：X分钟
 
-### 专业建议
-1. 建议内容1
-2. 建议内容2
-3. 建议内容3
-
-重要：每日目标请直接写总次数/总秒数，不要写"X组，每组X次"的格式。例如写"深蹲：30次"而不是"深蹲：3组，每组10次"。"""
+重要：
+1. 每日目标请直接写总次数/总秒数，不要写"X组，每组X次"的格式。
+2. 运动强度必须合理，适合普通人。深蹲不要超过50次，俯卧撑不要超过40次，平板支撑不要超过90秒。
+3. 不需要提供任何文字建议，只需要返回上述数据即可。"""
     
     # 尝试调用智谱AI API
     print(f"\n{'='*60}")
     print(f"🤖 [AI] 开始生成健身计划")
-    print(f"📊 [AI] 用户信息: 身高{height}cm, 体重{weight}kg, 年龄{age_text}, 性别{gender_text}, BMI{bmi_text}")
+    print(f"📊 [AI] 用户信息: 身高{height}cm, 体重{weight}kg, 年龄{age_text}, 性别{gender_text}, BMI{bmi_text}, 体脂{body_fat_text}, 目标{goal_text}")
     print(f"{'='*60}\n")
     
-    ai_response = call_zhipu_ai_api(prompt)
+    ai_response, ai_error = call_zhipu_ai_api(prompt)
     
     if ai_response:
         print(f"✅ [AI] 使用智谱AI生成计划")
@@ -1436,14 +1562,15 @@ def ai_generate_fitness_plan(height, weight, age, gender):
         result = parse_ai_response(ai_response, height, weight, age, gender)
         result["bmi"] = round(bmi, 1) if bmi else None
         result["fitness_level"] = fitness_level
-        result["reasoning"] = f"基于您的身体指标（BMI: {round(bmi, 1) if bmi else '未提供'}, 年龄: {age or '未提供'}, 性别: {gender_text}），智谱AI为您生成了个性化的健身计划。"
+        result["reasoning"] = f"基于您的身体指标（BMI: {round(bmi, 1) if bmi else '未提供'}, 体脂: {body_fat_text}, 目标: {goal_text}），智谱AI为您生成了个性化的健身计划。"
         result["ai_used"] = True
+        result["ai_status"] = "success"
         result["ai_raw_response"] = ai_response  # 保存原始AI响应
         print(f"📋 [AI] 解析后的计划: 深蹲{result['daily_goals']['squat']}次, 俯卧撑{result['daily_goals']['pushup']}次")
         print(f"{'='*60}\n")
         return result
     else:
-        print(f"⚠️  [AI] API调用失败，使用规则引擎生成计划")
+        print(f"⚠️  [AI] API调用失败 ({ai_error})，使用规则引擎生成计划")
     
     # 如果AI API调用失败，使用规则引擎（原有逻辑）
     # 基础建议值（根据健身水平调整）
@@ -1484,6 +1611,22 @@ def ai_generate_fitness_plan(height, weight, age, gender):
         "plank": max(20, int(base_values["plank"] * age_factor)),
         "jumping_jack": max(15, int(base_values["jumping_jack"] * age_factor * gender_factor))
     }
+
+    # 根据自定义目标调整
+    if custom_goal:
+        if custom_goal == "减脂":
+            daily_goals["jumping_jack"] = int(daily_goals["jumping_jack"] * 1.5)  # 增加有氧
+            daily_goals["squat"] = int(daily_goals["squat"] * 1.2)  # 增加大肌群消耗
+        elif custom_goal == "增肌":
+            daily_goals["pushup"] = int(daily_goals["pushup"] * 1.3)  # 增加力量
+            daily_goals["squat"] = int(daily_goals["squat"] * 1.3)
+            daily_goals["jumping_jack"] = int(daily_goals["jumping_jack"] * 0.8)  # 减少有氧
+        elif custom_goal == "塑形":
+            daily_goals["plank"] = int(daily_goals["plank"] * 1.3)  # 增加核心
+            daily_goals["squat"] = int(daily_goals["squat"] * 1.2)
+        elif custom_goal == "增强体能":
+            daily_goals["jumping_jack"] = int(daily_goals["jumping_jack"] * 1.3)
+            daily_goals["pushup"] = int(daily_goals["pushup"] * 1.2)
     
     # 生成每周目标（基于每日目标计算）
     # 建议每周运动5-6次，每次约30-45分钟
@@ -1491,6 +1634,14 @@ def ai_generate_fitness_plan(height, weight, age, gender):
         "total_sessions": 5 if fitness_level in ["beginner", "obese"] else 6,
         "total_duration": 150 if fitness_level in ["beginner", "obese"] else 180
     }
+
+    # 根据目标调整每周计划
+    if custom_goal == "减脂":
+        weekly_goals["total_sessions"] = 6
+        weekly_goals["total_duration"] = 200
+    elif custom_goal == "增肌":
+        weekly_goals["total_sessions"] = 4  # 增肌需要休息
+        weekly_goals["total_duration"] = 160
     
     # 生成建议说明
     suggestions = []
@@ -1510,6 +1661,32 @@ def ai_generate_fitness_plan(height, weight, age, gender):
     
     if gender == "female":
         suggestions.append("女性训练建议：可以适当增加平板支撑等核心训练，有助于塑造体形。")
+
+    # 生成模板化的AI建议（当AI服务不可用时）
+    # 根据目标定制更详细的建议
+    diet_advice = ""
+    exercise_advice = ""
+    
+    if custom_goal == "减脂":
+        diet_advice = "在饮食方面，试着把晚餐的主食减半，换成粗粮（如玉米、红薯）。早餐可以吃得丰富些，比如全麦面包配鸡蛋和牛奶。记得少吃油炸食品和甜点，它们是热量炸弹哦！"
+        exercise_advice = "运动时，保持心率在燃脂区间很重要。做开合跳时，注意膝盖微屈缓冲，避免关节受伤。如果觉得累，可以放慢节奏，但尽量不要停下来。"
+    elif custom_goal == "增肌":
+        diet_advice = "增肌需要足够的燃料！运动后30分钟内补充蛋白质非常关键，比如喝一杯蛋白粉或者吃两个蛋白。平时多吃牛肉、鸡胸肉，保证碳水化合物的摄入来维持训练强度。"
+        exercise_advice = "做俯卧撑和深蹲时，动作要慢，感受肌肉的发力。宁可少做几个，也要保证动作标准。每组之间休息60-90秒，让肌肉得到恢复。"
+    elif custom_goal == "塑形":
+        diet_advice = "塑形期要注重蛋白质和维生素的摄入。多吃深色蔬菜，它们富含抗氧化剂。晚餐尽量清淡，避免水肿。"
+        exercise_advice = "平板支撑是塑形的神器！做的时候收紧核心，不要塌腰。试着每天多坚持5秒，你会发现线条越来越紧致。"
+    else:
+        diet_advice = "保持均衡饮食是关键。每天保证一斤蔬菜半斤水果，多喝水促进代谢。少吃加工食品，回归天然食材。"
+        exercise_advice = "循序渐进是最好的策略。运动前充分热身，运动后拉伸放松。听从身体的声音，累了就休息，不要勉强。"
+
+    ai_advice_template = f"""你好呀！我是你的AI健身教练。很高兴能陪伴你开始这段"{custom_goal or '健康'}"之旅！
+
+{diet_advice}
+
+{exercise_advice}
+
+改变从来都不是一件容易的事，但我看到了你的决心。不要急于求成，身体的改变需要时间。每一滴汗水都不会白流，坚持下去，你一定能遇到更好的自己。加油，我看好你！"""
     
     gender_text = {"male": "男性", "female": "女性", "other": "其他"}.get(gender, "未知")
     print(f"📋 [规则引擎] 生成的计划: 深蹲{daily_goals['squat']}次, 俯卧撑{daily_goals['pushup']}次")
@@ -1518,11 +1695,102 @@ def ai_generate_fitness_plan(height, weight, age, gender):
         "daily_goals": daily_goals,
         "weekly_goals": weekly_goals,
         "suggestions": suggestions,
+        "ai_advice": ai_advice_template,
         "bmi": round(bmi, 1) if bmi else None,
         "fitness_level": fitness_level,
         "reasoning": f"基于您的身体指标（BMI: {round(bmi, 1) if bmi else '未提供'}, 年龄: {age or '未提供'}, 性别: {gender_text}），系统为您生成了个性化的健身计划。",
-        "ai_used": False
+        "ai_used": False,
+        "ai_status": ai_error if 'ai_error' in locals() else "unknown_error"
     }
+
+@app.route('/api/ai/chat', methods=['POST'])
+@require_auth
+def chat_with_coach():
+    """
+    AI Coach Chat: 与AI教练进行实时对话
+    
+    Request Body:
+        - message: 用户发送的消息
+        - history: 历史消息列表 (可选)
+    
+    Returns:
+        JSON: AI的回复
+    """
+    data = request.get_json() or {}
+    user_message = data.get('message')
+    history = data.get('history', [])
+    
+    if not user_message:
+        return jsonify({"error": "消息不能为空"}), 400
+        
+    # 构建对话上下文
+    messages = [
+        {
+            "role": "system",
+            "content": "你是一位专业的健身教练，语气亲切、专业且富有感染力。请根据用户的问题提供具体的健身、饮食或健康建议。回答要简洁明了，不要长篇大论。"
+        }
+    ]
+    
+    # 添加历史记录（限制最近5轮对话，避免token溢出）
+    for msg in history[-10:]:
+        messages.append({
+            "role": msg.get('role'),
+            "content": msg.get('content')
+        })
+        
+    # 添加当前用户消息
+    messages.append({
+        "role": "user",
+        "content": user_message
+    })
+    
+    # 调用AI API
+    api_key = os.getenv('ZHIPU_API_KEY')
+    if not api_key or api_key == 'your_zhipu_api_key_here':
+        # 尝试从文件读取
+        try:
+            from pathlib import Path
+            env_path = Path(__file__).parent / '.env'
+            if env_path.exists():
+                with open(env_path, 'r', encoding='utf-8') as f:
+                    for line in f:
+                        if line.strip().startswith('ZHIPU_API_KEY='):
+                            file_key = line.split('=', 1)[1].strip()
+                            if file_key and file_key != 'your_zhipu_api_key_here':
+                                api_key = file_key
+                                break
+        except:
+            pass
+            
+    if not api_key or api_key == 'your_zhipu_api_key_here':
+        return jsonify({"error": "AI服务未配置"}), 503
+        
+    url = "https://api.siliconflow.cn/v1/chat/completions"
+    headers = {
+        "Authorization": f"Bearer {api_key}",
+        "Content-Type": "application/json"
+    }
+    payload = {
+        "model": "THUDM/glm-4-9b-chat",
+        "messages": messages,
+        "temperature": 0.7,
+        "max_tokens": 500
+    }
+    
+    try:
+        response = requests.post(url, headers=headers, json=payload, timeout=30)
+        response.raise_for_status()
+        result = response.json()
+        
+        if 'choices' in result and len(result['choices']) > 0:
+            ai_reply = result['choices'][0]['message']['content']
+            return jsonify({"reply": ai_reply})
+        else:
+            return jsonify({"error": "AI未返回有效回复"}), 500
+            
+    except Exception as e:
+        print(f"❌ [Chat] AI调用失败: {e}")
+        return jsonify({"error": "AI服务暂时不可用"}), 500
 
 @app.route('/api/ai/generate-plan', methods=['POST'])
 @require_auth
@@ -1562,6 +1830,8 @@ def generate_ai_plan():
     weight = data.get('weight') or profile.get('weight')
     age = data.get('age') or profile.get('age')
     gender = data.get('gender') or profile.get('gender')
+    body_fat = data.get('body_fat') or profile.get('body_fat')
+    custom_goal = data.get('custom_goal')
     
     # 检查是否有足够的信息
     if not height or not weight:
@@ -1571,7 +1841,7 @@ def generate_ai_plan():
         }), 400
     
     # 调用AI agent生成建议
-    ai_plan = ai_generate_fitness_plan(height, weight, age, gender)
+    ai_plan = ai_generate_fitness_plan(height, weight, age, gender, body_fat, custom_goal)
     
     return jsonify(ai_plan)
 

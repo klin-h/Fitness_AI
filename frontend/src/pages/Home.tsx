@@ -385,6 +385,12 @@ function Home() {
                   健身计划定制
                 </button>
                 <button 
+                  className="w-full bg-blue-600 hover:bg-blue-700 text-white font-semibold py-3 px-4 rounded-lg transition-all duration-200 shadow-sm hover:shadow-md"
+                  onClick={() => navigate('/profile?tab=leaderboard')}
+                >
+                  查看排行榜
+                </button>
+                <button 
                   className="w-full bg-green-600 hover:bg-green-700 text-white font-semibold py-3 px-4 rounded-lg transition-all duration-200 shadow-sm hover:shadow-md flex items-center justify-center gap-2"
                   onClick={handleCheckin}
                 >

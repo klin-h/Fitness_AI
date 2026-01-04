@@ -11,6 +11,7 @@ interface User {
     weight?: number;
     age?: number;
     gender?: string;
+    body_fat?: number;
   };
 }
 

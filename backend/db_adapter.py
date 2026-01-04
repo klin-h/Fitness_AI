@@ -153,17 +153,25 @@ def save_user_plan(user_id, plan_data):
         # 验证JSON数据
         daily_goals = plan_data.get('daily_goals', {})
         weekly_goals = plan_data.get('weekly_goals', {})
+        custom_goal = plan_data.get('custom_goal')
+        ai_advice = plan_data.get('ai_advice')
         
         plan = Plan.query.filter_by(user_id=user_id).first()
         if plan:
             plan.daily_goals = json.dumps(daily_goals)
             plan.weekly_goals = json.dumps(weekly_goals)
+            if custom_goal:
+                plan.custom_goal = custom_goal
+            if ai_advice:
+                plan.ai_advice = ai_advice
             plan.updated_at = datetime.utcnow()
         else:
             plan = Plan(
                 user_id=user_id,
                 daily_goals=json.dumps(daily_goals),
-                weekly_goals=json.dumps(weekly_goals)
+                weekly_goals=json.dumps(weekly_goals),
+                custom_goal=custom_goal,
+                ai_advice=ai_advice
             )
             db.session.add(plan)
         return plan
