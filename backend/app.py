@@ -343,14 +343,17 @@ def submit_exercise_data(session_id):
         # 平板支撑的时长会在 end_session 时通过 end_time - start_time 计算
     
         # 更新分数记录 - 安全地处理 None 和空字符串
-        try:
-            if session_obj.scores and session_obj.scores.strip():
-                scores = json.loads(session_obj.scores)
-            else:
-                scores = []
-        except (json.JSONDecodeError, TypeError) as e:
-            logger.warning(f"解析分数记录失败: {e}, 使用空列表")
-            scores = []
+        scores = []
+        if session_obj.scores:
+            if isinstance(session_obj.scores, str):
+                try:
+                    if session_obj.scores.strip():
+                        scores = json.loads(session_obj.scores)
+                except (json.JSONDecodeError, TypeError) as e:
+                    logger.warning(f"解析分数记录失败: {e}, 使用空列表")
+                    scores = []
+            elif isinstance(session_obj.scores, (list, dict)):
+                scores = session_obj.scores
         
         scores.append({
             "timestamp": datetime.now().isoformat(),
@@ -519,14 +522,17 @@ def end_session(session_id):
             accuracy = min(100, (correct_count / total_count * 100) if total_count > 0 else 0)
         
         # 安全地解析分数记录
-        try:
-            if session_obj.scores and session_obj.scores.strip():
-                scores = json.loads(session_obj.scores)
-            else:
-                scores = []
-        except (json.JSONDecodeError, TypeError) as e:
-            logger.warning(f"解析分数记录失败: {e}, 使用空列表")
-            scores = []
+        scores = []
+        if session_obj.scores:
+            if isinstance(session_obj.scores, str):
+                try:
+                    if session_obj.scores.strip():
+                        scores = json.loads(session_obj.scores)
+                except (json.JSONDecodeError, TypeError) as e:
+                    logger.warning(f"解析分数记录失败: {e}, 使用空列表")
+                    scores = []
+            elif isinstance(session_obj.scores, (list, dict)):
+                scores = session_obj.scores
         
         avg_score = sum([s.get('score', 0) for s in scores]) / len(scores) if scores else 0
         
@@ -599,7 +605,8 @@ def get_user_history(user_id):
         })
     except Exception as e:
         logger.error(f"获取用户历史失败: {str(e)}", exc_info=True)
-        return jsonify({"error": "获取历史记录失败"}), 500
+        # 返回具体的错误信息以便调试
+        return jsonify({"error": "获取历史记录失败", "details": str(e)}), 500
 
 @app.route('/api/analytics/pose', methods=['POST'])
 def analyze_pose():
@@ -2386,8 +2393,14 @@ def generate_weekly_report():
         
         # 检查目标完成情况
         daily_goals = {}
-        if user_plan:
-            daily_goals = json.loads(user_plan.daily_goals) if user_plan.daily_goals else {}
+        if user_plan and user_plan.daily_goals:
+            if isinstance(user_plan.daily_goals, str):
+                try:
+                    daily_goals = json.loads(user_plan.daily_goals)
+                except:
+                    daily_goals = {}
+            else:
+                daily_goals = user_plan.daily_goals
         
         goal_completion = {}
         for ex_type, count in exercise_counts.items():

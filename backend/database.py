@@ -94,9 +94,29 @@ class Plan(db.Model):
     updated_at = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
     
     def to_dict(self):
+        daily_goals_data = {}
+        if self.daily_goals:
+            if isinstance(self.daily_goals, str):
+                try:
+                    daily_goals_data = json.loads(self.daily_goals)
+                except:
+                    daily_goals_data = {}
+            else:
+                daily_goals_data = self.daily_goals
+
+        weekly_goals_data = {}
+        if self.weekly_goals:
+            if isinstance(self.weekly_goals, str):
+                try:
+                    weekly_goals_data = json.loads(self.weekly_goals)
+                except:
+                    weekly_goals_data = {}
+            else:
+                weekly_goals_data = self.weekly_goals
+
         return {
-            'daily_goals': json.loads(self.daily_goals) if self.daily_goals else {},
-            'weekly_goals': json.loads(self.weekly_goals) if self.weekly_goals else {},
+            'daily_goals': daily_goals_data,
+            'weekly_goals': weekly_goals_data,
             'custom_goal': self.custom_goal,
             'ai_advice': self.ai_advice,
             'created_at': self.created_at.isoformat() if self.created_at else None,
@@ -125,6 +145,16 @@ class Session(db.Model):
     )
     
     def to_dict(self):
+        scores_data = []
+        if self.scores:
+            if isinstance(self.scores, str):
+                try:
+                    scores_data = json.loads(self.scores)
+                except:
+                    scores_data = []
+            else:
+                scores_data = self.scores
+
         return {
             'session_id': self.session_id,
             'user_id': self.user_id,
@@ -134,7 +164,7 @@ class Session(db.Model):
             'total_count': self.total_count,
             'correct_count': self.correct_count,
             'status': self.status,
-            'scores': json.loads(self.scores) if self.scores else []
+            'scores': scores_data
         }
 
 
