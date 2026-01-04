@@ -11,6 +11,12 @@ import requests
 from dotenv import load_dotenv
 import logging
 from sqlalchemy.exc import SQLAlchemyError, IntegrityError
+try:
+    from zhipuai import ZhipuAI
+except ImportError:
+    ZhipuAI = None
+    print("⚠️ [Warning] zhipuai library not found. Please install it via 'pip install zhipuai'")
+
 from utils import (
     validate_email, validate_username, validate_password,
     validate_height, validate_weight, validate_age,
@@ -1145,116 +1151,78 @@ def call_zhipu_ai_api(prompt, max_retries=2):
         print(f"🔍 [Debug] Current Env Keys: {[k for k in os.environ.keys() if 'API' in k]}")
         return None, "missing_key"
     
-    print(f"🤖 [AI] 正在调用硅基流动API (GLM-4-9B)...")
+    print(f"🤖 [AI] 正在调用智谱AI官方API (open.bigmodel.cn)...")
     print(f"🔑 [AI] API Key状态: {'已配置' if api_key else '未配置'} (长度: {len(api_key)})")
     print(f"📝 [AI] 提示词长度: {len(prompt)} 字符")
     
-    url = "https://api.siliconflow.cn/v1/chat/completions"
-    headers = {
-        "Authorization": f"Bearer {api_key}",
-        "Content-Type": "application/json"
-    }
-    data = {
-        "model": "THUDM/glm-4-9b-chat",  # 使用硅基流动免费版GLM-4模型
-        "messages": [
-            {
-                "role": "system",
-                "content": "你是一位专业的健身教练，擅长根据用户的身体指标制定个性化的健身计划。请用中文回答，提供具体、可执行的建议。回答格式要清晰，包含具体的数值。"
-            },
-            {
-                "role": "user",
-                "content": prompt
-            }
-        ],
-        "temperature": 0.7,
-        "max_tokens": 1000
-    }
-    
-    # 备选模型列表（按优先级排序）
-    # 仅保留智谱(THUDM)系列模型
-    models = [
-        "THUDM/glm-4-9b-chat"
-    ]
+    # 使用官方SDK或直接HTTP请求
+    # 优先使用 glm-4-flash (免费且速度快)
+    model = "glm-4-flash"
     
     last_error = "unknown_error"
     
     # 重试机制
     for attempt in range(max_retries + 1):
-        # 轮询使用不同的模型，增加成功率
-        current_model = models[attempt % len(models)]
-        
         try:
             if attempt > 0:
-                print(f"🔄 [AI] 第 {attempt + 1} 次尝试 (切换模型: {current_model})...")
+                print(f"🔄 [AI] 第 {attempt + 1} 次尝试...")
             
-            data["model"] = current_model
-            print(f"🌐 [AI] 发送请求到: {url} (Model: {current_model})")
-            
-            # 增加超时时间：连接超时5秒，读取超时30秒
-            response = requests.post(url, headers=headers, json=data, timeout=(5, 30))
-            
-            # 特殊处理 400 错误 (Model does not exist)
-            if response.status_code == 400:
-                error_data = response.json()
-                if error_data.get('code') == 20012: # Model does not exist
-                    print(f"❌ [AI] 模型 {current_model} 不存在或不可用，尝试下一个模型...")
-                    last_error = "model_not_exist"
-                    continue
-            
-            response.raise_for_status()
-            
-            result = response.json()
-            if 'choices' in result and len(result['choices']) > 0:
-                ai_content = result['choices'][0]['message']['content']
-                print(f"✅ [AI] API调用成功！")
-                print(f"📄 [AI] AI返回内容长度: {len(ai_content)} 字符")
-                print(f"📄 [AI] AI返回内容预览: {ai_content[:200]}...")
-                return ai_content, None
+            if ZhipuAI:
+                client = ZhipuAI(api_key=api_key)
+                response = client.chat.completions.create(
+                    model=model,
+                    messages=[
+                        {
+                            "role": "system",
+                            "content": "你是一位专业的健身教练，擅长根据用户的身体指标制定个性化的健身计划。请用中文回答，提供具体、可执行的建议。回答格式要清晰，包含具体的数值。"
+                        },
+                        {
+                            "role": "user",
+                            "content": prompt
+                        }
+                    ],
+                    temperature=0.7,
+                    max_tokens=1000
+                )
+                ai_content = response.choices[0].message.content
             else:
-                print(f"❌ [AI] API返回格式异常: {result}")
-                last_error = "api_error"
-                # 如果是格式异常，可能模型有问题，尝试下一个
-                continue
-                
-        except requests.exceptions.Timeout as e:
-            print(f"⏱️  [AI] 请求超时 (尝试 {attempt + 1}/{max_retries + 1}): {e}")
-            last_error = "timeout"
-            if attempt < max_retries:
-                import time
-                wait_time = (attempt + 1) * 2  # 递增等待时间
-                print(f"⏳ [AI] 等待 {wait_time} 秒后重试...")
-                time.sleep(wait_time)
-            else:
-                print(f"❌ [AI] 所有重试均失败，网络可能不稳定或服务器响应慢")
-                
-        except requests.exceptions.ConnectionError as e:
-            print(f"🔌 [AI] 连接错误 (尝试 {attempt + 1}/{max_retries + 1}): {e}")
-            last_error = "connection_error"
-            if attempt < max_retries:
-                import time
-                wait_time = (attempt + 1) * 2
-                print(f"⏳ [AI] 等待 {wait_time} 秒后重试...")
-                time.sleep(wait_time)
-            else:
-                print(f"❌ [AI] 无法连接到服务器，请检查网络连接")
-                
-        except requests.exceptions.RequestException as e:
-            print(f"❌ [AI] 网络请求失败 (尝试 {attempt + 1}/{max_retries + 1}): {e}")
-            last_error = "api_error"
-            if attempt < max_retries:
-                import time
-                wait_time = (attempt + 1) * 2
-                print(f"⏳ [AI] 等待 {wait_time} 秒后重试...")
-                time.sleep(wait_time)
-            else:
-                pass
+                # Fallback to requests if SDK not installed
+                url = "https://open.bigmodel.cn/api/paas/v4/chat/completions"
+                headers = {
+                    "Authorization": f"Bearer {api_key}",
+                    "Content-Type": "application/json"
+                }
+                data = {
+                    "model": model,
+                    "messages": [
+                        {
+                            "role": "system",
+                            "content": "你是一位专业的健身教练，擅长根据用户的身体指标制定个性化的健身计划。请用中文回答，提供具体、可执行的建议。回答格式要清晰，包含具体的数值。"
+                        },
+                        {
+                            "role": "user",
+                            "content": prompt
+                        }
+                    ],
+                    "temperature": 0.7,
+                    "max_tokens": 1000
+                }
+                resp = requests.post(url, headers=headers, json=data, timeout=(5, 30))
+                resp.raise_for_status()
+                ai_content = resp.json()['choices'][0]['message']['content']
+
+            print(f"✅ [AI] API调用成功！")
+            print(f"📄 [AI] AI返回内容长度: {len(ai_content)} 字符")
+            return ai_content, None
                 
         except Exception as e:
-            print(f"❌ [AI] API调用失败: {e}")
-            import traceback
-            traceback.print_exc()
-            last_error = "unknown_error"
-            return None, "unknown_error"
+            print(f"❌ [AI] API调用失败 (尝试 {attempt + 1}/{max_retries + 1}): {e}")
+            last_error = str(e)
+            if attempt < max_retries:
+                import time
+                time.sleep(2)
+            else:
+                pass
     
     return None, last_error
 
@@ -1798,18 +1766,11 @@ def chat_with_coach():
     masked_key = f"{api_key[:4]}...{api_key[-4:]}" if len(api_key) > 8 else "***"
     print(f"🔑 [Chat] 使用API Key: {masked_key}")
 
-    url = "https://api.siliconflow.cn/v1/chat/completions"
-    headers = {
-        "Authorization": f"Bearer {api_key}",
-        "Content-Type": "application/json"
-    }
-    
-    # 定义模型列表：主模型和备用模型
-    # 如果主模型忙，自动切换到备用模型
-    # 仅保留智谱(THUDM)系列模型，以符合用户要求
+    # 使用官方SDK或直接HTTP请求
+    # 优先使用 glm-4-flash (免费且速度快)
     models_to_try = [
-        "THUDM/glm-4-9b-chat",      # 首选：标准版
-        "THUDM/glm-4-9b-chat-1m",   # 备选：1M长上下文版
+        "glm-4-flash",
+        "glm-4"
     ]
     
     import time
@@ -1818,53 +1779,53 @@ def chat_with_coach():
     
     for model in models_to_try:
         print(f"🤖 [Chat] 尝试使用模型: {model}")
-        payload = {
-            "model": model,
-            "messages": messages,
-            "temperature": 0.7,
-            "max_tokens": 500
-        }
         
         try:
-            # 增加超时时间到60秒
-            response = requests.post(url, headers=headers, json=payload, timeout=60) 
-            
-            # 如果成功，直接返回
-            if response.status_code == 200:
-                result = response.json()
-                if 'choices' in result and len(result['choices']) > 0:
-                    ai_reply = result['choices'][0]['message']['content']
-                    # 附加使用的模型信息（可选）
-                    # ai_reply += f"\n\n(Generated by {model})"
-                    return jsonify({"reply": ai_reply})
-            
-            # 如果失败，记录错误并尝试下一个模型
-            error_detail = response.text
-            print(f"⚠️ [Chat] 模型 {model} 调用失败 ({response.status_code}): {error_detail}")
-            last_error = error_detail
-            
-            # 特殊处理 400 错误 (Model does not exist)
-            if response.status_code == 400:
-                try:
-                    error_json = response.json()
-                    if error_json.get('code') == 20012: # Model does not exist
-                        print(f"❌ [Chat] 模型 {model} 不存在或不可用，尝试下一个模型...")
-                        continue
-                except:
-                    pass
-
-            # 如果是 50603 (System busy) 或 429 (Rate limit)，等待一下再试下一个
-            if response.status_code in [429, 500, 502, 503, 504] or "50603" in error_detail:
-                time.sleep(1) # 简单的退避
-                continue
+            if ZhipuAI:
+                client = ZhipuAI(api_key=api_key)
+                response = client.chat.completions.create(
+                    model=model,
+                    messages=messages,
+                    temperature=0.7,
+                    max_tokens=500
+                )
+                ai_reply = response.choices[0].message.content
+                return jsonify({"reply": ai_reply})
             else:
-                # 如果是其他错误（如认证失败），可能换模型也没用，但还是试一下吧
-                continue
+                # Fallback to requests if SDK not installed
+                url = "https://open.bigmodel.cn/api/paas/v4/chat/completions"
+                headers = {
+                    "Authorization": f"Bearer {api_key}",
+                    "Content-Type": "application/json"
+                }
+                payload = {
+                    "model": model,
+                    "messages": messages,
+                    "temperature": 0.7,
+                    "max_tokens": 500
+                }
+                # 增加超时时间到60秒
+                response = requests.post(url, headers=headers, json=payload, timeout=60) 
+                
+                # 如果成功，直接返回
+                if response.status_code == 200:
+                    result = response.json()
+                    if 'choices' in result and len(result['choices']) > 0:
+                        ai_reply = result['choices'][0]['message']['content']
+                        return jsonify({"reply": ai_reply})
+                
+                # 如果失败，记录错误并尝试下一个模型
+                error_detail = response.text
+                print(f"⚠️ [Chat] 模型 {model} 调用失败 ({response.status_code}): {error_detail}")
+                last_error = error_detail
+                
+                # 如果是 50603 (System busy) 或 429 (Rate limit)，等待一下再试下一个
+                if response.status_code in [429, 500, 502, 503, 504]:
+                    time.sleep(1) # 简单的退避
+                    continue
+                else:
+                    continue
 
-        except requests.exceptions.Timeout:
-            print(f"⚠️ [Chat] 模型 {model} 请求超时")
-            last_error = "请求超时"
-            continue
         except Exception as e:
             print(f"⚠️ [Chat] 模型 {model} 发生异常: {str(e)}")
             last_error = str(e)
