@@ -2,8 +2,10 @@ import React, { useState, useEffect } from 'react';
 import { useAuth } from '../contexts/AuthContext';
 import { useNavigate, useSearchParams } from 'react-router-dom';
 import { api } from '../services/api';
-import { User, Lock, Mail, UserCircle, Save, LogOut, ArrowLeft, Edit2, History, Target, Sparkles, BarChart2 } from 'lucide-react';
+import { User, Lock, Mail, UserCircle, Save, LogOut, ArrowLeft, Edit2, History, Target, Sparkles, BarChart2, Trophy, TrendingUp } from 'lucide-react';
 import DataVisualization from './DataVisualization';
+import AchievementsTab from './AchievementsTab';
+import LeaderboardTab from './LeaderboardTab';
 
 const Profile: React.FC = () => {
   const { user, token, logout, updateUser } = useAuth();
@@ -11,9 +13,9 @@ const Profile: React.FC = () => {
   const [searchParams] = useSearchParams();
   
   // 从URL参数获取初始标签页
-  const tabFromUrl = searchParams.get('tab') as 'profile' | 'password' | 'history' | 'plan' | 'stats' | null;
-  const [activeTab, setActiveTab] = useState<'profile' | 'password' | 'history' | 'plan' | 'stats'>(
-    tabFromUrl && ['profile', 'password', 'history', 'plan', 'stats'].includes(tabFromUrl) ? tabFromUrl : 'profile'
+  const tabFromUrl = searchParams.get('tab') as 'profile' | 'password' | 'history' | 'plan' | 'stats' | 'achievements' | 'leaderboard' | null;
+  const [activeTab, setActiveTab] = useState<'profile' | 'password' | 'history' | 'plan' | 'stats' | 'achievements' | 'leaderboard'>(
+    tabFromUrl && ['profile', 'password', 'history', 'plan', 'stats', 'achievements', 'leaderboard'].includes(tabFromUrl) ? tabFromUrl : 'profile'
   );
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
@@ -55,8 +57,8 @@ const Profile: React.FC = () => {
 
   // 监听URL参数变化
   useEffect(() => {
-    const tabFromUrl = searchParams.get('tab') as 'profile' | 'password' | 'history' | 'plan' | null;
-    if (tabFromUrl && ['profile', 'password', 'history', 'plan'].includes(tabFromUrl)) {
+    const tabFromUrl = searchParams.get('tab') as 'profile' | 'password' | 'history' | 'plan' | 'stats' | 'achievements' | 'leaderboard' | null;
+    if (tabFromUrl && ['profile', 'password', 'history', 'plan', 'stats', 'achievements', 'leaderboard'].includes(tabFromUrl)) {
       setActiveTab(tabFromUrl);
     }
   }, [searchParams]);
@@ -341,10 +343,10 @@ const Profile: React.FC = () => {
           </div>
 
           {/* 标签页 */}
-          <div className="flex space-x-2 mb-8 border-b border-gray-200">
+          <div className="flex space-x-2 mb-8 border-b border-gray-200 overflow-x-auto">
             <button
               onClick={() => setActiveTab('profile')}
-              className={`px-6 py-3 font-semibold transition-all rounded-t-lg ${
+              className={`px-6 py-3 font-semibold transition-all rounded-t-lg whitespace-nowrap ${
                 activeTab === 'profile'
                   ? 'text-blue-600 bg-blue-50 border-b-2 border-blue-600'
                   : 'text-gray-600 hover:text-blue-600 hover:bg-gray-50'
@@ -355,7 +357,7 @@ const Profile: React.FC = () => {
             </button>
             <button
               onClick={() => setActiveTab('password')}
-              className={`px-6 py-3 font-semibold transition-all rounded-t-lg ${
+              className={`px-6 py-3 font-semibold transition-all rounded-t-lg whitespace-nowrap ${
                 activeTab === 'password'
                   ? 'text-blue-600 bg-blue-50 border-b-2 border-blue-600'
                   : 'text-gray-600 hover:text-blue-600 hover:bg-gray-50'
@@ -367,7 +369,7 @@ const Profile: React.FC = () => {
             <button
               onClick={() => setActiveTab('history')}
               data-tab="history"
-              className={`px-6 py-3 font-semibold transition-all rounded-t-lg ${
+              className={`px-6 py-3 font-semibold transition-all rounded-t-lg whitespace-nowrap ${
                 activeTab === 'history'
                   ? 'text-blue-600 bg-blue-50 border-b-2 border-blue-600'
                   : 'text-gray-600 hover:text-blue-600 hover:bg-gray-50'
@@ -379,7 +381,7 @@ const Profile: React.FC = () => {
             <button
               onClick={() => setActiveTab('plan')}
               data-tab="plan"
-              className={`px-6 py-3 font-semibold transition-all rounded-t-lg ${
+              className={`px-6 py-3 font-semibold transition-all rounded-t-lg whitespace-nowrap ${
                 activeTab === 'plan'
                   ? 'text-blue-600 bg-blue-50 border-b-2 border-blue-600'
                   : 'text-gray-600 hover:text-blue-600 hover:bg-gray-50'
@@ -387,6 +389,42 @@ const Profile: React.FC = () => {
             >
               <Target className="inline h-5 w-5 mr-2" />
               健身计划
+            </button>
+            <button
+              onClick={() => setActiveTab('stats')}
+              data-tab="stats"
+              className={`px-6 py-3 font-semibold transition-all rounded-t-lg whitespace-nowrap ${
+                activeTab === 'stats'
+                  ? 'text-blue-600 bg-blue-50 border-b-2 border-blue-600'
+                  : 'text-gray-600 hover:text-blue-600 hover:bg-gray-50'
+              }`}
+            >
+              <BarChart2 className="inline h-5 w-5 mr-2" />
+              数据统计
+            </button>
+            <button
+              onClick={() => setActiveTab('achievements')}
+              data-tab="achievements"
+              className={`px-6 py-3 font-semibold transition-all rounded-t-lg whitespace-nowrap ${
+                activeTab === 'achievements'
+                  ? 'text-blue-600 bg-blue-50 border-b-2 border-blue-600'
+                  : 'text-gray-600 hover:text-blue-600 hover:bg-gray-50'
+              }`}
+            >
+              <Trophy className="inline h-5 w-5 mr-2" />
+              成就徽章
+            </button>
+            <button
+              onClick={() => setActiveTab('leaderboard')}
+              data-tab="leaderboard"
+              className={`px-6 py-3 font-semibold transition-all rounded-t-lg whitespace-nowrap ${
+                activeTab === 'leaderboard'
+                  ? 'text-blue-600 bg-blue-50 border-b-2 border-blue-600'
+                  : 'text-gray-600 hover:text-blue-600 hover:bg-gray-50'
+              }`}
+            >
+              <TrendingUp className="inline h-5 w-5 mr-2" />
+              排行榜
             </button>
           </div>
 
@@ -639,8 +677,10 @@ const Profile: React.FC = () => {
                     const duration = endTime 
                       ? Math.floor((endTime.getTime() - startTime.getTime()) / 1000)
                       : null;
+                    // 确保准确率不超过100%，并且correct_count不超过total_count
+                    const correctCount = Math.min(record.correct_count || 0, record.total_count || 0);
                     const accuracy = record.total_count > 0 
-                      ? ((record.correct_count / record.total_count) * 100).toFixed(1)
+                      ? Math.min(100, (correctCount / record.total_count) * 100).toFixed(1)
                       : '0';
                     
                     const exerciseNames: { [key: string]: string } = {
@@ -845,6 +885,21 @@ const Profile: React.FC = () => {
               </button>
             </form>
           )}
+
+          {/* 数据可视化标签页 */}
+          {activeTab === 'stats' && (
+            <DataVisualization />
+          )}
+
+          {/* 成就徽章标签页 */}
+          {activeTab === 'achievements' && (
+            <AchievementsTab token={token || null} />
+          )}
+
+          {/* 排行榜标签页 */}
+          {activeTab === 'leaderboard' && (
+            <LeaderboardTab />
+          )}
         </div>
       </main>
     </div>
@@ -852,4 +907,3 @@ const Profile: React.FC = () => {
 };
 
 export default Profile;
-

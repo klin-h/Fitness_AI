@@ -7,6 +7,8 @@ interface StatsPanelProps {
     isCorrect: boolean;
     feedback: string;
     score: number;
+    correctCount?: number;
+    totalCount?: number;
   };
   currentExercise: string;
   duration: number;
@@ -70,7 +72,9 @@ const StatsPanel: React.FC<StatsPanelProps> = ({
             <TrendingUp className="text-blue-600" size={24} />
           </div>
           <div className="text-3xl font-bold text-gray-900 mb-1">
-            {exerciseStats.count > 0 ? Math.round((exerciseStats.score / (exerciseStats.count * 10)) * 100) : 0}%
+            {exerciseStats.totalCount && exerciseStats.totalCount > 0 
+              ? Math.min(100, Math.round((exerciseStats.correctCount || 0) / exerciseStats.totalCount * 100))
+              : 0}%
           </div>
           <div className="text-sm text-gray-600">准确率</div>
         </div>
@@ -90,7 +94,6 @@ const StatsPanel: React.FC<StatsPanelProps> = ({
 
       {/* 成就徽章 */}
       <div className="space-y-3">
-        <div className="text-gray-700 text-sm font-medium">成就徽章</div>
         <div className="flex space-x-2">
           {exerciseStats.count >= 5 && (
             <div className="w-8 h-8 bg-yellow-100 border border-yellow-300 rounded-full flex items-center justify-center">
