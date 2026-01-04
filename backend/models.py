@@ -1,5 +1,5 @@
 from flask_sqlalchemy import SQLAlchemy
-from sqlalchemy.dialects.postgresql import JSONB
+from sqlalchemy import JSON
 from datetime import datetime
 
 db = SQLAlchemy()
@@ -15,7 +15,7 @@ class User(db.Model):
     avatar = db.Column(db.String(200))
     created_at = db.Column(db.DateTime, default=datetime.utcnow)
     # 存储身高、体重等个人信息
-    profile = db.Column(JSONB, default={})
+    profile = db.Column(JSON, default={})
 
     def to_dict(self):
         return {
@@ -33,8 +33,8 @@ class Plan(db.Model):
     
     id = db.Column(db.Integer, primary_key=True)
     user_id = db.Column(db.String(50), db.ForeignKey('users.user_id'), unique=True)
-    daily_goals = db.Column(JSONB, default={})
-    weekly_goals = db.Column(JSONB, default={})
+    daily_goals = db.Column(JSON, default={})
+    weekly_goals = db.Column(JSON, default={})
     created_at = db.Column(db.DateTime, default=datetime.utcnow)
     updated_at = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 
@@ -58,7 +58,7 @@ class Session(db.Model):
     correct_count = db.Column(db.Integer, default=0)
     status = db.Column(db.String(20))
     # 存储详细的评分数组
-    scores = db.Column(JSONB, default=[])
+    scores = db.Column(JSON, default=[])
 
     def to_dict(self):
         return {
