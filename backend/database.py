@@ -36,6 +36,23 @@ class User(db.Model):
     
     def to_dict(self):
         """转换为字典"""
+        try:
+            # 安全地访问 profile 关系
+            profile_dict = {}
+            if self.profile:
+                try:
+                    profile_dict = self.profile.to_dict()
+                except Exception as e:
+                    # 如果访问 profile 失败，返回空字典
+                    import logging
+                    logging.getLogger(__name__).warning(f"访问用户profile失败: {str(e)}")
+                    profile_dict = {}
+        except Exception as e:
+            # 如果关系访问失败，返回空字典
+            import logging
+            logging.getLogger(__name__).warning(f"访问用户profile关系失败: {str(e)}")
+            profile_dict = {}
+        
         return {
             'user_id': self.user_id,
             'username': self.username,
@@ -43,7 +60,7 @@ class User(db.Model):
             'nickname': self.nickname,
             'avatar': self.avatar,
             'created_at': self.created_at.isoformat() if self.created_at else None,
-            'profile': self.profile.to_dict() if self.profile else {}
+            'profile': profile_dict
         }
 
 

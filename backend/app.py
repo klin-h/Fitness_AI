@@ -15,7 +15,7 @@ try:
     from zhipuai import ZhipuAI
 except ImportError:
     ZhipuAI = None
-    print("⚠️ [Warning] zhipuai library not found. Please install it via 'pip install zhipuai'")
+    print("[Warning] zhipuai library not found. Please install it via 'pip install zhipuai'")
 
 from utils import (
     validate_email, validate_username, validate_password,
@@ -41,9 +41,9 @@ load_dotenv(dotenv_path=env_path)
 api_key = os.getenv('ZHIPU_API_KEY')
 if api_key:
     masked_key = api_key[:5] + '*' * (len(api_key) - 5) if len(api_key) > 5 else '*****'
-    print(f"🔑 [Config] ZHIPU_API_KEY loaded: {masked_key}")
+    print(f"[Config] ZHIPU_API_KEY loaded: {masked_key}")
 else:
-    print("⚠️ [Config] ZHIPU_API_KEY not found in environment variables")
+    print("[Config] ZHIPU_API_KEY not found in environment variables")
 
 app = Flask(__name__)
 # 配置 CORS，允许所有来源和所有方法（开发环境）
@@ -56,28 +56,58 @@ CORS(app, resources={
 })
 
 # 数据库配置
-# 默认使用SQLite（本地开发），生产环境可使用PostgreSQL
-# SQLite: sqlite:///fitnessai.db
-# PostgreSQL: postgresql://用户名:密码@主机:端口/数据库名
+# 必须使用PostgreSQL，不支持SQLite
+# PostgreSQL连接字符串格式: postgresql://用户名:密码@主机:端口/数据库名
 # 示例: postgresql://postgres:password@localhost:5432/fitnessai
-app.config['SQLALCHEMY_DATABASE_URI'] = os.getenv(
-    'DATABASE_URL', 
-    'sqlite:///fitnessai.db'  # 默认SQLite配置，适合本地开发
-)
+database_url = os.getenv('DATABASE_URL')
+
+if not database_url:
+    raise ValueError(
+        "❌ DATABASE_URL 环境变量未设置！\n"
+        "请设置 PostgreSQL 数据库连接字符串。\n"
+        "格式: postgresql://用户名:密码@主机:端口/数据库名\n"
+        "示例: postgresql://postgres:password@localhost:5432/fitnessai\n"
+        "请在 .env 文件中设置 DATABASE_URL，或在环境变量中设置。"
+    )
+
+# 检查是否使用了 SQLite（不允许）
+if 'sqlite' in database_url.lower():
+    raise ValueError(
+        "❌ 不支持 SQLite！必须使用 PostgreSQL。\n"
+        "请设置 PostgreSQL 数据库连接字符串。\n"
+        "格式: postgresql://用户名:密码@主机:端口/数据库名\n"
+        "示例: postgresql://postgres:password@localhost:5432/fitnessai"
+    )
+
+# 验证是否为 PostgreSQL 连接字符串
+if 'postgresql' not in database_url.lower() and 'postgres' not in database_url.lower():
+    raise ValueError(
+        f"❌ 无效的数据库连接字符串: {database_url}\n"
+        "必须使用 PostgreSQL 数据库。\n"
+        "格式: postgresql://用户名:密码@主机:端口/数据库名"
+    )
+
+app.config['SQLALCHEMY_DATABASE_URI'] = database_url
 app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
 
-# SQLite不需要连接池配置，PostgreSQL需要
-database_url = os.getenv('DATABASE_URL', 'sqlite:///fitnessai.db')
-if 'postgresql' in database_url or 'postgres' in database_url:
-    app.config['SQLALCHEMY_ENGINE_OPTIONS'] = {
-        'pool_pre_ping': True,  # 自动重连
-        'pool_recycle': 300,    # 连接回收时间
-    }
-else:
-    # SQLite配置
-    app.config['SQLALCHEMY_ENGINE_OPTIONS'] = {
-        'connect_args': {'check_same_thread': False}  # SQLite需要这个参数
-    }
+# PostgreSQL 连接池配置
+# 对于云数据库（如 Neon），需要特殊配置
+engine_options = {
+    'pool_pre_ping': True,  # 自动重连
+    'pool_recycle': 300,    # 连接回收时间（5分钟）
+    'pool_size': 5,         # 连接池大小（云数据库建议较小）
+    'max_overflow': 10,     # 最大溢出连接数
+}
+
+# 如果是云数据库（Neon等），可能需要 SSL 配置
+if 'neon.tech' in database_url.lower() or 'pooler' in database_url.lower():
+    # Neon 数据库通常需要 SSL，连接字符串中应该已经包含
+    # 如果连接失败，可能需要添加 ?sslmode=require
+    if '?sslmode=' not in database_url and '?ssl=' not in database_url:
+        logger.info("💡 检测到 Neon 数据库，建议在连接字符串中添加 SSL 参数")
+        logger.info("💡 如果连接失败，尝试添加 ?sslmode=require 到连接字符串末尾")
+
+app.config['SQLALCHEMY_ENGINE_OPTIONS'] = engine_options
 
 # 初始化数据库
 from database import db, init_db, Session, User, UserProfile, Plan, UserAchievement, Checkin, ChallengeCompletion, Token
@@ -98,35 +128,61 @@ from db_adapter import (
 exercise_data = {}
 
 # 数据库初始化（应用启动时）
-with app.app_context():
-    try:
-        # 确保数据库表存在
-        db.create_all()
-        print("✅ 数据库连接成功")
-        
-        # 检查是否需要迁移JSON数据（仅在首次运行时）
-        from database import User
-        user_count = User.query.count()
-        if user_count == 0:
-            print("📥 检测到空数据库，尝试迁移JSON数据...")
-            try:
-                from database import migrate_from_json
-                migrate_from_json(app)
-            except Exception as e:
-                print(f"⚠️  数据迁移失败（可能是首次运行）: {e}")
-        else:
-            print(f"✅ 数据库已包含 {user_count} 个用户")
-    except Exception as e:
-        print(f"❌ 数据库连接失败: {e}")
-        db_type = "PostgreSQL" if "postgresql" in app.config['SQLALCHEMY_DATABASE_URI'] or "postgres" in app.config['SQLALCHEMY_DATABASE_URI'] else "SQLite"
-        if db_type == "PostgreSQL":
-            print("💡 请确保PostgreSQL已安装并运行，且数据库已创建")
-            print("💡 可以使用以下命令创建数据库:")
-            print("   createdb -U postgres fitnessai")
-            print("💡 或修改.env文件中的DATABASE_URL配置")
-        else:
-            print("💡 SQLite数据库文件将自动创建在项目根目录")
-            print("💡 如需使用PostgreSQL，请在.env文件中设置DATABASE_URL")
+# 使用延迟初始化，避免启动时因数据库连接问题阻塞
+def init_database():
+    """延迟初始化数据库，避免启动时阻塞"""
+    import time
+    max_retries = 3
+    retry_delay = 2
+    
+    for attempt in range(max_retries):
+        try:
+            with app.app_context():
+                # 确保数据库表存在
+                db.create_all()
+                print("✅ 数据库连接成功")
+                
+                # 检查是否需要迁移JSON数据（仅在首次运行时）
+                from database import User
+                user_count = User.query.count()
+                if user_count == 0:
+                    print("📥 检测到空数据库，尝试迁移JSON数据...")
+                    try:
+                        from database import migrate_from_json
+                        migrate_from_json(app)
+                    except Exception as e:
+                        print(f"⚠️  数据迁移失败（可能是首次运行）: {e}")
+                else:
+                    print(f"✅ 数据库已包含 {user_count} 个用户")
+                return  # 成功则返回
+        except Exception as e:
+            if attempt < max_retries - 1:
+                print(f"⚠️  数据库连接失败（尝试 {attempt + 1}/{max_retries}）: {e}")
+                print(f"💡 {retry_delay}秒后重试...")
+                time.sleep(retry_delay)
+            else:
+                print(f"❌ 数据库连接失败（已重试 {max_retries} 次）: {e}")
+                print("💡 请确保PostgreSQL已安装并运行，且数据库已创建")
+                if 'neon.tech' in database_url.lower():
+                    print("💡 如果是 Neon 数据库，请检查:")
+                    print("   1. 网络连接是否正常")
+                    print("   2. 连接字符串是否正确")
+                    print("   3. 数据库是否已创建")
+                else:
+                    print("💡 可以使用以下命令创建数据库:")
+                    print("   createdb -U postgres fitnessai")
+                    print("💡 或使用 psql:")
+                    print("   psql -U postgres")
+                    print("   CREATE DATABASE fitnessai;")
+                print("💡 检查 .env 文件中的 DATABASE_URL 配置是否正确")
+                masked_url = database_url[:50] + "..." if len(database_url) > 50 else database_url
+                print(f"💡 当前 DATABASE_URL: {masked_url}")
+                # 不抛出异常，允许应用启动（数据库连接会在实际使用时重试）
+
+# 在后台线程中初始化数据库，避免阻塞启动
+import threading
+db_init_thread = threading.Thread(target=init_database, daemon=True)
+db_init_thread.start()
 
 def hash_password(password):
     """密码哈希"""
@@ -845,6 +901,7 @@ def login():
 
 @app.route('/api/auth/me', methods=['GET'])
 @require_auth
+@handle_db_error
 def get_current_user():
     """
     获取当前用户信息（需要认证）
@@ -855,17 +912,24 @@ def get_current_user():
     Returns:
         JSON: 用户信息
     """
-    user_id = request.user_id
-    user = get_user_by_id(user_id)
-    
-    if not user:
-        return jsonify({"error": "用户不存在"}), 404
-    
-    user_dict = user.to_dict()
-    # 移除敏感信息
-    user_dict.pop('password_hash', None)
-    
-    return jsonify(user_dict)
+    try:
+        user_id = request.user_id
+        user = get_user_by_id(user_id)
+        
+        if not user:
+            return jsonify({"error": "用户不存在"}), 404
+        
+        # to_dict() 方法已经安全处理了 profile 为 None 的情况
+        # 不需要强制创建 profile，让用户在更新时自动创建
+        user_dict = user.to_dict()
+        # 移除敏感信息
+        user_dict.pop('password_hash', None)
+        
+        return jsonify(user_dict)
+    except Exception as e:
+        logger.error(f"获取当前用户信息失败: {str(e)}", exc_info=True)
+        db.session.rollback()
+        raise
 
 @app.route('/api/auth/change-password', methods=['POST'])
 @require_auth
@@ -925,6 +989,7 @@ def change_password():
 
 @app.route('/api/user/profile', methods=['GET'])
 @require_auth
+@handle_db_error
 def get_user_profile():
     """
     获取用户个人资料（需要认证）
@@ -935,14 +1000,21 @@ def get_user_profile():
     Returns:
         JSON: 用户个人资料
     """
-    user_id = request.user_id
-    user = get_user_by_id(user_id)
-    
-    if not user:
-        return jsonify({"error": "用户不存在"}), 404
-    
-    user_dict = user.to_dict()
-    return jsonify(user_dict)
+    try:
+        user_id = request.user_id
+        user = get_user_by_id(user_id)
+        
+        if not user:
+            return jsonify({"error": "用户不存在"}), 404
+        
+        # to_dict() 方法已经安全处理了 profile 为 None 的情况
+        # 不需要强制创建 profile，让用户在更新时自动创建
+        user_dict = user.to_dict()
+        return jsonify(user_dict)
+    except Exception as e:
+        logger.error(f"获取用户个人资料失败: {str(e)}", exc_info=True)
+        db.session.rollback()
+        raise
 
 @app.route('/api/user/profile', methods=['PUT'])
 @require_auth
@@ -2779,37 +2851,60 @@ def handle_exception(error):
 
 @app.route('/api/health', methods=['GET'])
 def health_check():
-    """健康检查接口"""
+    """健康检查接口（快速响应，不阻塞）"""
     try:
-        # 检查数据库连接
-        db.session.execute(db.text('SELECT 1'))
+        # 尝试快速检查数据库连接（不阻塞）
+        try:
+            # 使用连接池的快速检查
+            with db.engine.connect() as conn:
+                conn.execute(db.text('SELECT 1'))
+            db_status = "connected"
+        except Exception as db_error:
+            logger.warning(f"数据库连接检查失败: {str(db_error)}")
+            db_status = "disconnected"
+        
         return jsonify({
-            "status": "healthy",
-            "database": "connected",
+            "status": "healthy" if db_status == "connected" else "degraded",
+            "database": db_status,
             "timestamp": datetime.now().isoformat()
         }), 200
     except Exception as e:
         logger.error(f"健康检查失败: {str(e)}")
+        # 即使出错也返回200，避免影响负载均衡
         return jsonify({
             "status": "unhealthy",
-            "database": "disconnected",
+            "database": "unknown",
             "error": str(e),
             "timestamp": datetime.now().isoformat()
-        }), 503
+        }), 200
 
 if __name__ == '__main__':
-    # 启动时检查数据库连接
-    try:
-        with app.app_context():
-            db.session.execute(db.text('SELECT 1'))
-            db_type = "PostgreSQL" if "postgresql" in app.config['SQLALCHEMY_DATABASE_URI'] or "postgres" in app.config['SQLALCHEMY_DATABASE_URI'] else "SQLite"
-            logger.info(f"✅ 数据库连接正常 ({db_type})")
-    except Exception as e:
-        logger.error(f"❌ 数据库连接失败: {e}")
-        db_type = "PostgreSQL" if "postgresql" in app.config['SQLALCHEMY_DATABASE_URI'] or "postgres" in app.config['SQLALCHEMY_DATABASE_URI'] else "SQLite"
-        if db_type == "PostgreSQL":
-            logger.error("💡 请确保PostgreSQL已启动并配置正确")
-        else:
-            logger.error("💡 SQLite数据库文件将自动创建")
+    # 启动时检查数据库连接（不阻塞启动）
+    def check_db_on_startup():
+        import time
+        time.sleep(1)  # 等待应用完全初始化
+        try:
+            with app.app_context():
+                db.session.execute(db.text('SELECT 1'))
+                logger.info("✅ PostgreSQL 数据库连接正常")
+        except Exception as e:
+            logger.warning(f"⚠️ PostgreSQL 数据库连接检查失败: {e}")
+            logger.info("💡 服务器将继续启动，数据库连接将在实际使用时重试")
+            logger.info("💡 检查 .env 文件中的 DATABASE_URL 配置")
     
-    app.run(debug=True, host='0.0.0.0', port=8000) 
+    # 在后台线程中检查数据库，不阻塞服务器启动
+    import threading
+    db_check_thread = threading.Thread(target=check_db_on_startup, daemon=True)
+    db_check_thread.start()
+    
+    print("[INFO] Starting Flask server...")
+    print("[INFO] Server address: http://0.0.0.0:8000")
+    print("[INFO] Local access: http://localhost:8000")
+    print("[INFO] Press Ctrl+C to stop the server")
+    
+    try:
+        app.run(debug=True, host='0.0.0.0', port=8000, use_reloader=False)
+    except Exception as e:
+        print(f"[ERROR] Failed to start server: {e}")
+        import traceback
+        traceback.print_exc() 

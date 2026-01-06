@@ -162,6 +162,38 @@ const Profile: React.FC = () => {
     }
   }, [searchParams]);
 
+  // 成功消息自动消失（2秒后）
+  useEffect(() => {
+    if (success) {
+      const timer = setTimeout(() => {
+        setSuccess('');
+      }, 2000); // 2秒后自动清除
+
+      return () => {
+        clearTimeout(timer); // 清理定时器
+      };
+    }
+  }, [success]);
+
+  // 错误消息自动消失（2秒后）
+  useEffect(() => {
+    if (error) {
+      const timer = setTimeout(() => {
+        setError('');
+      }, 2000); // 2秒后自动清除
+
+      return () => {
+        clearTimeout(timer); // 清理定时器
+      };
+    }
+  }, [error]);
+
+  // 切换面板时清除成功和错误提示
+  useEffect(() => {
+    setSuccess('');
+    setError('');
+  }, [activeTab]);
+
   // 加载用户完整信息（只在组件挂载时执行一次）
   useEffect(() => {
     const loadUserProfile = async () => {

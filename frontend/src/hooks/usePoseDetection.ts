@@ -157,10 +157,12 @@ export const usePoseDetection = (exerciseType: string = 'squat') => {
 
     try {
       // 使用多个备用 CDN 镜像，提高加载成功率
+      // MediaPipe 的 locateFile 是同步的，所以我们需要选择一个最可靠的 CDN
+      // 优先使用 jsdelivr，如果失败 MediaPipe 会抛出错误，我们可以在 catch 中处理
       const pose = new Pose({
         locateFile: (file) => {
-          // 直接使用可靠的 CDN 地址，避免 Vercel 路由问题
-          // 使用 jsdelivr CDN，它通常比 unpkg 更稳定且支持自动回退
+          // 优先使用 jsdelivr CDN（通常最稳定且在中国大陆访问较好）
+          // 如果失败，MediaPipe 会抛出错误，我们可以在 catch 中捕获并提示用户
           return `https://cdn.jsdelivr.net/npm/@mediapipe/pose@0.5.1675469404/${file}`;
         }
       });
@@ -196,28 +198,68 @@ export const usePoseDetection = (exerciseType: string = 'squat') => {
       });
 
       cameraRef.current = camera;
-    } catch (error) {
+    } catch (error: any) {
       console.error('Failed to initialize pose detection:', error);
+      const errorMessage = error?.message || String(error);
+      
+      // 根据错误类型提供更具体的提示
+      let feedback = '初始化姿态检测失败';
+      if (errorMessage.includes('fetch') || errorMessage.includes('network') || errorMessage.includes('timeout')) {
+        feedback = '网络连接失败，请检查网络后重试';
+      } else if (errorMessage.includes('camera') || errorMessage.includes('permission')) {
+        feedback = '无法访问摄像头，请检查权限设置';
+      } else {
+        feedback = '初始化失败，请刷新页面重试';
+      }
+      
       setExerciseStats(prev => ({
         ...prev,
-        feedback: '初始化姿态检测失败，请刷新页面重试'
+        feedback
       }));
     }
   }, [drawPose, analyzeExercise]);
 
   // 开始检测
   const startDetection = async () => {
-    if (!poseRef.current || !cameraRef.current) {
-      await initializePose();
-    }
-    
-    if (cameraRef.current) {
-      await cameraRef.current.start();
-      setIsActive(true);
+    try {
+      if (!poseRef.current || !cameraRef.current) {
+        await initializePose();
+      }
+      
+      if (!poseRef.current) {
+        setExerciseStats(prev => ({
+          ...prev,
+          feedback: '姿态检测初始化失败，请刷新页面重试'
+        }));
+        return;
+      }
+      
+      if (cameraRef.current) {
+        await cameraRef.current.start();
+        setIsActive(true);
+        setExerciseStats(prev => ({
+          ...prev,
+          feedback: '摄像头已启动，开始运动！'
+        }));
+      }
+    } catch (error: any) {
+      console.error('启动检测失败:', error);
+      const errorMessage = error?.message || String(error);
+      
+      let feedback = '启动失败';
+      if (errorMessage.includes('camera') || errorMessage.includes('permission')) {
+        feedback = '无法访问摄像头，请检查浏览器权限设置';
+      } else if (errorMessage.includes('NotAllowedError')) {
+        feedback = '摄像头权限被拒绝，请在浏览器设置中允许摄像头访问';
+      } else {
+        feedback = '启动失败，请刷新页面重试';
+      }
+      
       setExerciseStats(prev => ({
         ...prev,
-        feedback: '摄像头已启动，开始运动！'
+        feedback
       }));
+      setIsActive(false);
     }
   };
 

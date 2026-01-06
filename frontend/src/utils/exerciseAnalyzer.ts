@@ -551,23 +551,23 @@ export class PlankAnalyzer {
 export class JumpingJackAnalyzer {
   private jumpCount = 0;
   private lastState: 'closed' | 'open' = 'closed';
-  private readonly armThreshold = 1.8; // 手臂张开比例阈值（相对于肩膀距离）
-  private readonly armHeightThreshold = 0.1; // 手臂需要抬高的阈值
+  private readonly armThreshold = 1.4; // 手臂张开比例阈值
+  private readonly armHeightThreshold = 0.05; // 手臂抬高阈值
   
   // 状态稳定性跟踪
   private consecutiveOpenFrames = 0;   // 连续张开帧数
   private consecutiveClosedFrames = 0; // 连续闭合帧数
-  private requiredFrames = 6;           // 增加所需帧数，提高稳定性
+  private requiredFrames = 3;           // 所需帧数
   
   // 冷却机制
   private cooldownCounter = 0;
-  private readonly cooldownFrames = 20; // 增加冷却时间，确保动作间隔
+  private readonly cooldownFrames = 10; // 冷却时间
   
   // 完整动作跟踪
   private movementPhase: 'none' | 'opening' | 'closing' | 'complete' = 'none';
   private inOpenPosition = false; // 是否处于张开位置
   private lastArmRatio = 0.0;
-  private readonly armRatioChangeThreshold = 0.3; // 手臂比例变化阈值
+  private readonly armRatioChangeThreshold = 0.5; // 手臂比例变化阈值
 
   analyze(landmarks: Landmark[]): ExerciseAnalysis {
     const leftShoulder = landmarks[11];
@@ -606,22 +606,23 @@ export class JumpingJackAnalyzer {
     // 计算手臂比例
     const armRatio = wristDistance / Math.max(shoulderDistance, 0.1); // 防止除零
 
-    // 检查手臂高度 - 开合跳时手臂应该抬高
+    // 检查手臂高度 - 开合跳时手臂应该抬高（放宽条件：只要有一侧抬高即可）
     const leftArmRaised = leftWrist.y < leftShoulder.y - this.armHeightThreshold;
     const rightArmRaised = rightWrist.y < rightShoulder.y - this.armHeightThreshold;
-    const armsRaised = leftArmRaised && rightArmRaised;
+    const armsRaised = leftArmRaised || rightArmRaised; // 改为 OR，只要一侧抬高即可
 
-    // 更严格的判断条件：手臂需要张开并且抬高
-    const armsOpen = armRatio > this.armThreshold && armsRaised;
+    // 放宽判断条件：手臂张开即可，不强制要求同时抬高（但抬高会提高得分）
+    const armsOpen = armRatio > this.armThreshold;
 
-    // 检查手臂比例变化的连续性，避免误检
+    // 检查手臂比例变化的连续性，避免误检（放宽条件）
     const armRatioChange = Math.abs(armRatio - this.lastArmRatio);
     const isSmoothMovement = armRatioChange < this.armRatioChangeThreshold;
     this.lastArmRatio = armRatio;
 
-    // 确定当前状态
+    // 确定当前状态（放宽条件：只要手臂张开就认为是张开状态）
     let currentState: 'closed' | 'open' = 'closed';
-    if (armsOpen && isSmoothMovement) {
+    if (armsOpen) {
+      // 如果手臂张开，即使变化较大也认为是张开状态
       currentState = 'open';
     }
 
@@ -659,15 +660,16 @@ export class JumpingJackAnalyzer {
 
     // 计算得分和正确性
     const score = this.calculateJumpingJackScore(confirmedState, armsOpen, armsRaised, armRatio);
-    // 开合跳：只有完成完整动作时才认为是正确的
+    // 开合跳：放宽正确性判断（只要手臂张开就认为正确，完成完整动作更佳）
     const isCorrect = this.movementPhase === 'complete' || 
-                     (confirmedState === 'open' && armsOpen && armsRaised);
+                     (confirmedState === 'open' && armsOpen) ||
+                     (armsOpen && armsRaised); // 即使不在确认状态，只要张开且抬高也算正确
 
     return {
       isCorrect,
       score,
       feedback,
-      count: this.jumpCount,
+      count: Math.floor(this.jumpCount / 2), // 除以2并向下取整显示
     };
   }
 
