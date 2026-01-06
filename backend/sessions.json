@@ -1,0 +1,136 @@
+{
+  "HXT_20251213_161847": {
+    "session_id": "HXT_20251213_161847",
+    "user_id": "HXT",
+    "exercise_type": "squat",
+    "start_time": "2025-12-13T16:18:47.970554",
+    "end_time": "2025-12-13T16:18:54.218087",
+    "total_count": 1,
+    "correct_count": 1,
+    "scores": [
+      {
+        "timestamp": "2025-12-13T16:18:52.719051",
+        "score": 10,
+        "is_correct": true,
+        "feedback": "很好！已完成 1 次",
+        "pose_data": null
+      }
+    ],
+    "status": "completed"
+  },
+  "HXT_20251213_171853": {
+    "session_id": "HXT_20251213_171853",
+    "user_id": "HXT",
+    "exercise_type": "plank",
+    "start_time": "2025-12-13T17:18:53.933318",
+    "end_time": "2025-12-13T17:19:00.486471",
+    "total_count": 1,
+    "correct_count": 1,
+    "scores": [
+      {
+        "timestamp": "2025-12-13T17:18:58.951486",
+        "score": 10,
+        "is_correct": true,
+        "feedback": "很好！已完成 1 次",
+        "pose_data": null
+      }
+    ],
+    "status": "completed"
+  },
+  "HXT_20251213_175457": {
+    "session_id": "HXT_20251213_175457",
+    "user_id": "HXT",
+    "exercise_type": "plank",
+    "start_time": "2025-12-13T17:54:57.634443",
+    "end_time": "2025-12-13T17:55:04.427853",
+    "total_count": 1,
+    "correct_count": 1,
+    "scores": [
+      {
+        "timestamp": "2025-12-13T17:55:02.384239",
+        "score": 10,
+        "is_correct": true,
+        "feedback": "很好！已完成 1 次",
+        "pose_data": null
+      }
+    ],
+    "status": "completed"
+  },
+  "HXT_20251213_223133": {
+    "session_id": "HXT_20251213_223133",
+    "user_id": "HXT",
+    "exercise_type": "squat",
+    "start_time": "2025-12-13T22:31:33.224811",
+    "end_time": "2025-12-13T22:31:49.173991",
+    "total_count": 3,
+    "correct_count": 3,
+    "scores": [
+      {
+        "timestamp": "2025-12-13T22:31:38.251718",
+        "score": 10,
+        "is_correct": true,
+        "feedback": "很好！已完成 1 次",
+        "pose_data": null
+      },
+      {
+        "timestamp": "2025-12-13T22:31:42.939846",
+        "score": 20,
+        "is_correct": true,
+        "feedback": "很好！已完成 2 次",
+        "pose_data": null
+      },
+      {
+        "timestamp": "2025-12-13T22:31:48.509519",
+        "score": 30,
+        "is_correct": true,
+        "feedback": "很好！已完成 3 次",
+        "pose_data": null
+      }
+    ],
+    "status": "completed"
+  },
+  "HXT_20251214_194602": {
+    "session_id": "HXT_20251214_194602",
+    "user_id": "HXT",
+    "exercise_type": "squat",
+    "start_time": "2025-12-14T19:46:02.063750",
+    "end_time": null,
+    "total_count": 0,
+    "correct_count": 0,
+    "scores": [],
+    "status": "active"
+  },
+  "HXT_20251215_183402": {
+    "session_id": "HXT_20251215_183402",
+    "user_id": "HXT",
+    "exercise_type": "squat",
+    "start_time": "2025-12-15T18:34:02.167621",
+    "end_time": null,
+    "total_count": 0,
+    "correct_count": 0,
+    "scores": [],
+    "status": "active"
+  },
+  "HXT_20251215_183916": {
+    "session_id": "HXT_20251215_183916",
+    "user_id": "HXT",
+    "exercise_type": "squat",
+    "start_time": "2025-12-15T18:39:16.656381",
+    "end_time": null,
+    "total_count": 0,
+    "correct_count": 0,
+    "scores": [],
+    "status": "active"
+  },
+  "HXT_20251215_184129": {
+    "session_id": "HXT_20251215_184129",
+    "user_id": "HXT",
+    "exercise_type": "squat",
+    "start_time": "2025-12-15T18:41:29.201742",
+    "end_time": null,
+    "total_count": 0,
+    "correct_count": 0,
+    "scores": [],
+    "status": "active"
+  }
+}
