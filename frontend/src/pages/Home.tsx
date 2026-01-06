@@ -140,6 +140,8 @@ function Home() {
 
         setSessionId(null);
         setDuration(0); // 重置计时器
+        resetStats(); // 重置运动统计数据，防止重复叠加到今日目标
+        setIsFinishing(false); // Stop loading spinner explicitly here when modal shows
         
         // 自动打卡
         try {
@@ -159,8 +161,7 @@ function Home() {
       } catch (err) {
         console.error('结束运动会话失败:', err);
         alert('生成报告失败，请检查网络连接');
-      } finally {
-        setIsFinishing(false);
+        setIsFinishing(false); // Stop spinner on error
       }
     } else {
         setIsFinishing(false);
@@ -402,6 +403,25 @@ function Home() {
                   exerciseStats={exerciseStats}
                   currentExercise={getExerciseName(selectedExercise)}
                   duration={duration}
+                  dailyGoal={(() => {
+                    const isPlank = selectedExercise === 'plank';
+                    let currentValue = 0;
+                    let targetValue = 0;
+
+                    if (isPlank) {
+                       currentValue = (dailyStats?.plank || 0) + duration;
+                       targetValue = userPlan?.daily_goals?.plank || 60;
+                    } else {
+                       const dailyCount = dailyStats?.[selectedExercise as keyof typeof dailyStats] || 0;
+                       currentValue = dailyCount + exerciseStats.count;
+                       if (userPlan?.daily_goals) {
+                          targetValue = (userPlan.daily_goals as any)[selectedExercise] || 20;
+                       } else {
+                          targetValue = 20;
+                       }
+                    }
+                    return { current: currentValue, target: targetValue };
+                  })()}
                 />
               </div>
             </div>
@@ -510,97 +530,14 @@ function Home() {
               </div>
             )}
 
-            {/* 今日目标 */}
-            <div className="bg-white rounded-xl p-6 shadow-md border border-blue-100">
+            {/* 今日目标 - 已移除，因为整合到了上方的StatsPanel中 */}
+            {/* <div className="bg-white rounded-xl p-6 shadow-md border border-blue-100">
               <h3 className="text-xl font-bold text-gray-900 mb-6 flex items-center gap-2">
                 <div className="w-1 h-6 bg-blue-600 rounded-full"></div>
                 今日目标
               </h3>
-              <div className="space-y-5">
-                {/* 当前选择的运动目标 */}
-                {(() => {
-                  const exerciseName = getExerciseName(selectedExercise);
-                  const isPlank = selectedExercise === 'plank';
-                  
-                  // 平板支撑显示时长（秒），其他显示次数
-                  let currentValue = 0;
-                  let targetValue = 0;
-                  
-                  if (isPlank) {
-                    // 平板支撑：显示时长（秒）
-                    // 历史累计 + 当前会话时长
-                    currentValue = (dailyStats?.plank || 0) + duration;
-                    if (userPlan?.daily_goals?.plank) {
-                      targetValue = userPlan.daily_goals.plank; // 目标秒数
-                    } else {
-                      targetValue = 60; // 默认60秒
-                    }
-                  } else {
-                    // 其他运动：显示次数
-                    // 历史累计 + 当前会话次数
-                    const dailyCount = dailyStats?.[selectedExercise as keyof typeof dailyStats] || 0;
-                    currentValue = dailyCount + exerciseStats.count;
-                    
-                    if (userPlan?.daily_goals) {
-                      switch (selectedExercise) {
-                        case 'squat':
-                          targetValue = userPlan.daily_goals.squat || 20;
-                          break;
-                        case 'pushup':
-                          targetValue = userPlan.daily_goals.pushup || 15;
-                          break;
-                        case 'jumping_jack':
-                          targetValue = userPlan.daily_goals.jumping_jack || 30;
-                          break;
-                        default:
-                          targetValue = 20;
-                      }
-                    } else {
-                      targetValue = 20; // 默认值
-                    }
-                  }
-                  
-                  const progress = targetValue > 0 ? Math.min((currentValue / targetValue) * 100, 100) : 0;
-                  const unit = isPlank ? '秒' : '次';
-                  
-                  // 格式化显示：平板支撑显示为"分:秒"格式
-                  const formatValue = (val: number, isTime: boolean) => {
-                    if (isTime) {
-                      const mins = Math.floor(val / 60);
-                      const secs = val % 60;
-                      return mins > 0 ? `${mins}分${secs}秒` : `${secs}秒`;
-                    }
-                    return val;
-                  };
-                  
-                  const formatTarget = (val: number, isTime: boolean) => {
-                    if (isTime) {
-                      const mins = Math.floor(val / 60);
-                      const secs = val % 60;
-                      return mins > 0 ? `${mins}分${secs}秒` : `${secs}秒`;
-                    }
-                    return val;
-                  };
-                  
-                  return (
-                    <div>
-                      <div className="flex justify-between text-sm mb-2">
-                        <span className="text-gray-600 font-medium">{exerciseName}</span>
-                        <span className="text-gray-900 font-semibold">
-                          {isPlank ? formatValue(currentValue, true) : currentValue}/{isPlank ? formatTarget(targetValue, true) : targetValue} {unit}
-                        </span>
-                      </div>
-                      <div className="w-full bg-blue-100 rounded-full h-3 overflow-hidden">
-                        <div 
-                          className="bg-blue-600 h-3 rounded-full transition-all duration-500" 
-                          style={{ width: `${progress}%` }}
-                        ></div>
-                      </div>
-                    </div>
-                  );
-                })()}
-              </div>
-            </div>
+               ...old content...
+            </div> */}
             </div>
           </div>
         </div>
