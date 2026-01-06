@@ -4,7 +4,7 @@
 支持本地开发和服务器部署
 """
 from flask_sqlalchemy import SQLAlchemy
-from datetime import datetime
+from datetime import datetime, timedelta, date
 import json
 
 db = SQLAlchemy()
@@ -240,28 +240,39 @@ class Checkin(db.Model):
         checkin_dates = [c.checkin_date for c in checkins]
         checkin_dates.sort(reverse=True)
         
-        # 计算连续天数
+        # 计算连续天数（从今天开始往前计算）
+        today = date.today()
         current_streak = 0
         longest_streak = 0
         temp_streak = 0
         last_date = None
         
-        for i, date in enumerate(checkin_dates):
-            if i == 0:
-                current_streak = 1
-                temp_streak = 1
-                last_date = date
-            else:
-                days_diff = (last_date - date).days
-                if days_diff == 1:
+        # 如果最后一次打卡不是今天，连续打卡为0
+        if checkin_dates[0] != today:
+            current_streak = 0
+        else:
+            # 从今天开始往前计算连续打卡
+            expected_date = today
+            for checkin_date in checkin_dates:
+                if checkin_date == expected_date:
                     current_streak += 1
+                    expected_date = expected_date - timedelta(days=1)
+                else:
+                    break
+        
+        # 计算最长连续打卡
+        for i, checkin_date in enumerate(checkin_dates):
+            if i == 0:
+                temp_streak = 1
+                last_date = checkin_date
+            else:
+                days_diff = (last_date - checkin_date).days
+                if days_diff == 1:
                     temp_streak += 1
-                elif days_diff > 1:
+                else:
                     longest_streak = max(longest_streak, temp_streak)
-                    if i == 1:  # 如果第一次就断了，当前连续为1
-                        current_streak = 1
                     temp_streak = 1
-                last_date = date
+                last_date = checkin_date
         
         longest_streak = max(longest_streak, temp_streak)
         

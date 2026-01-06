@@ -2,12 +2,12 @@ import React from 'react';
 import { X, Flame, Clock, Activity, Target, Brain } from 'lucide-react';
 
 interface SessionSummary {
-  duration: number; // Duration in minutes
-  exercise_type: string;
-  total_count: number;
-  accuracy: number;
-  calories: number;
-  ai_comment: string;
+  duration?: number; // Duration in minutes
+  exercise_type?: string;
+  total_count?: number;
+  accuracy?: number;
+  calories?: number;
+  ai_comment?: string;
 }
 
 interface SessionSummaryModalProps {
@@ -26,7 +26,9 @@ const SessionSummaryModal: React.FC<SessionSummaryModalProps> = ({ isOpen, onClo
     'jumping_jack': '开合跳'
   };
 
-  const exerciseName = exerciseNames[summary.exercise_type] || summary.exercise_type;
+  const exerciseName = summary.exercise_type 
+    ? (exerciseNames[summary.exercise_type] || summary.exercise_type)
+    : '运动';
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black bg-opacity-50 backdrop-blur-sm animate-fade-in">
@@ -60,7 +62,7 @@ const SessionSummaryModal: React.FC<SessionSummaryModalProps> = ({ isOpen, onClo
                 <span className="font-medium">消耗热量</span>
               </div>
               <div className="text-2xl font-bold text-gray-800">
-                {summary.calories.toFixed(1)} <span className="text-sm font-normal text-gray-500">kcal</span>
+                {(summary.calories ?? 0).toFixed(1)} <span className="text-sm font-normal text-gray-500">kcal</span>
               </div>
             </div>
 
@@ -70,7 +72,7 @@ const SessionSummaryModal: React.FC<SessionSummaryModalProps> = ({ isOpen, onClo
                 <span className="font-medium">动作次数</span>
               </div>
               <div className="text-2xl font-bold text-gray-800">
-                {summary.total_count} <span className="text-sm font-normal text-gray-500">次</span>
+                {summary.total_count ?? 0} <span className="text-sm font-normal text-gray-500">次</span>
               </div>
             </div>
 
@@ -80,7 +82,7 @@ const SessionSummaryModal: React.FC<SessionSummaryModalProps> = ({ isOpen, onClo
                 <span className="font-medium">准确率</span>
               </div>
               <div className="text-2xl font-bold text-gray-800">
-                {summary.accuracy.toFixed(1)}<span className="text-sm font-normal text-gray-500">%</span>
+                {(summary.accuracy ?? 0).toFixed(1)}<span className="text-sm font-normal text-gray-500">%</span>
               </div>
             </div>
 
@@ -90,7 +92,7 @@ const SessionSummaryModal: React.FC<SessionSummaryModalProps> = ({ isOpen, onClo
                 <span className="font-medium">训练时长</span>
               </div>
               <div className="text-2xl font-bold text-gray-800">
-                {summary.duration.toFixed(1)} <span className="text-sm font-normal text-gray-500">分钟</span>
+                {(summary.duration ?? 0).toFixed(1)} <span className="text-sm font-normal text-gray-500">分钟</span>
               </div>
             </div>
           </div>

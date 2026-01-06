@@ -701,13 +701,13 @@ def end_session(session_id):
                 "summary": {
                     "total_count": total_count if not is_plank else int(duration_seconds),  # 平板支撑返回秒数
                     "correct_count": correct_count if not is_plank else int(duration_seconds),
-                    "accuracy": round(accuracy, 2),
-                    "average_score": round(avg_score, 2),
-                    "duration": duration_minutes,  # 分钟
+                    "accuracy": round(accuracy, 2) if accuracy is not None else 0,
+                    "average_score": round(avg_score, 2) if avg_score is not None else 0,
+                    "duration": round(duration_seconds / 60, 1) if duration_seconds is not None else 0,  # 分钟，保留一位小数
                     "duration_seconds": int(duration_seconds) if is_plank else None,  # 平板支撑返回秒数
-                    "exercise_type": session_obj.exercise_type,
-                    "calories": calories_burned,
-                    "ai_comment": ai_summary
+                    "exercise_type": session_obj.exercise_type or '',
+                    "calories": calories_burned if calories_burned is not None else 0,
+                    "ai_comment": ai_summary or "训练完成！继续保持，注意休息。"
                 },
                 "message": "Session ended successfully"
             })
@@ -2348,10 +2348,12 @@ def get_streak_leaderboard():
         
         for user in all_users:
             stats = get_user_checkin_stats(user.user_id)
-            if stats['current_streak'] > 0:
+            # 使用current_streak，如果为0则使用longest_streak
+            streak = stats['current_streak'] if stats['current_streak'] > 0 else stats['longest_streak']
+            if streak > 0:  # 只显示有打卡记录的用户
                 user_streaks.append({
                     "user_id": user.user_id,
-                    "streak": stats['current_streak']
+                    "streak": streak
                 })
         
         user_streaks.sort(key=lambda x: x['streak'], reverse=True)
@@ -2383,14 +2385,15 @@ def get_accuracy_leaderboard():
         from sqlalchemy import func
         from database import Session
         
-        # 计算每个用户的平均准确率
+        # 计算每个用户的平均准确率（排除平板支撑，因为平板支撑的total_count是秒数）
         user_stats = db.session.query(
             Session.user_id,
             func.sum(Session.correct_count).label('total_correct'),
             func.sum(Session.total_count).label('total_count')
         ).filter(
             Session.status == 'completed',
-            Session.total_count > 0
+            Session.total_count > 0,
+            Session.exercise_type != 'plank'  # 排除平板支撑
         ).group_by(Session.user_id).having(
             func.sum(Session.total_count) > 0
         ).all()
@@ -2398,7 +2401,8 @@ def get_accuracy_leaderboard():
         avg_accuracies = {}
         for user_id, total_correct, total_count in user_stats:
             if total_count and total_count > 0:
-                # 确保准确率不超过100%
+                # 确保correct_count不超过total_count，准确率不超过100%
+                total_correct = min(total_correct, total_count)
                 avg_accuracies[user_id] = min(100, (total_correct / total_count) * 100)
         
         leaderboard = sorted(avg_accuracies.items(), key=lambda x: x[1], reverse=True)[:20]
