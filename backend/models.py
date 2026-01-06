@@ -59,6 +59,9 @@ class Session(db.Model):
     status = db.Column(db.String(20))
     # 存储详细的评分数组
     scores = db.Column(JSON, default=[])
+    # 新增字段: 卡路里和AI评论
+    calories = db.Column(db.Float, default=0.0)
+    ai_comment = db.Column(db.Text)
 
     def to_dict(self):
         return {
@@ -70,7 +73,9 @@ class Session(db.Model):
             "total_count": self.total_count,
             "correct_count": self.correct_count,
             "status": self.status,
-            "scores": self.scores
+            "scores": self.scores,
+            "calories": self.calories,
+            "ai_comment": self.ai_comment
         }
 
 class Token(db.Model):

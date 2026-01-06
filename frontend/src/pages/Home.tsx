@@ -3,6 +3,7 @@ import { useNavigate } from 'react-router-dom';
 import CameraView from '../components/CameraView';
 import StatsPanel from '../components/StatsPanel';
 import ExerciseSelector from '../components/ExerciseSelector';
+import SessionSummaryModal from '../components/SessionSummaryModal';
 import { usePoseDetection } from '../hooks/usePoseDetection';
 import { Activity, User, LogOut, Calendar, Target, Trophy } from 'lucide-react';
 import { useAuth } from '../contexts/AuthContext';
@@ -13,6 +14,8 @@ function Home() {
   const [duration, setDuration] = useState(0);
   const [isTimerActive, setIsTimerActive] = useState(false);
   const [sessionId, setSessionId] = useState<string | null>(null);
+  const [showSummaryModal, setShowSummaryModal] = useState(false);
+  const [sessionSummary, setSessionSummary] = useState<any>(null);
   const { user, token, logout } = useAuth();
   const navigate = useNavigate();
   const previousCountRef = useRef(0);
@@ -36,6 +39,7 @@ function Home() {
     };
   } | null>(null);
   
+  const [isFinishing, setIsFinishing] = useState(false);
   const {
     videoRef,
     canvasRef,
@@ -49,9 +53,10 @@ function Home() {
   // 包装 startDetection 以添加会话创建
   const handleStartDetection = async () => {
     await startDetection();
+    setIsTimerActive(true); // 恢复/开始计时
     
-    // 创建新的运动会话
-    if (user && token) {
+    // 如果没有会话ID，则创建新的运动会话
+    if (!sessionId && user && token) {
       try {
         const response = await api.post(
           '/api/session/start',
@@ -69,19 +74,40 @@ function Home() {
     }
   };
 
-  // 包装 stopDetection 以添加会话结束
-  const handleStopDetection = async () => {
-    await stopDetection();
+  // 包装 stopDetection 为暂停功能
+  const handlePauseDetection = () => {
+     // 仅停止摄像头检测和计时器，不结束会话
+     stopDetection();
+     setIsTimerActive(false); 
+  };
+  
+  // 新增：结束本次运动
+  const handleEndSession = async () => {
+    if (isFinishing) return;
+    
+    // 停止检测和计时
+    stopDetection();
+    setIsTimerActive(false);
+    setIsFinishing(true);
     
     // 结束运动会话
     if (sessionId && token) {
       try {
-        await api.post(
+        const response = await api.post(
           `/api/session/${sessionId}/end`,
-          {},
+          {
+            duration: duration // 发送前端计算的实际运动时长(秒)
+          },
           token
         );
+        
+        if (response.summary) {
+          setSessionSummary(response.summary);
+          setShowSummaryModal(true);
+        }
+
         setSessionId(null);
+        setDuration(0); // 重置计时器
         
         // 自动打卡
         try {
@@ -100,7 +126,12 @@ function Home() {
         }
       } catch (err) {
         console.error('结束运动会话失败:', err);
+        alert('生成报告失败，请检查网络连接');
+      } finally {
+        setIsFinishing(false);
       }
+    } else {
+        setIsFinishing(false);
     }
   };
 
@@ -145,11 +176,8 @@ function Home() {
 
   // 当开始检测时启动计时器
   useEffect(() => {
-    setIsTimerActive(isActive);
-    if (!isActive) {
-      // 当停止检测时，可以选择重置时间或保持
-      // setDuration(0);
-    }
+    // 移除这个副作用，因为我们现在手动控制计时器状态
+    // setIsTimerActive(isActive); 
   }, [isActive]);
 
   // 加载用户健身计划
@@ -327,8 +355,10 @@ function Home() {
                   isActive={isActive}
                   exerciseStats={exerciseStats}
                   startDetection={handleStartDetection}
-                  stopDetection={handleStopDetection}
+                  stopDetection={handlePauseDetection}
+                  endSession={handleEndSession}
                   resetStats={resetStats}
+                  isLoading={isFinishing}
                 />
               </div>
             </div>
@@ -538,6 +568,11 @@ function Home() {
             </div>
           </div>
         </div>
+        <SessionSummaryModal
+          isOpen={showSummaryModal}
+          onClose={() => setShowSummaryModal(false)}
+          summary={sessionSummary}
+        />
       </main>
 
       {/* 底部信息 */}

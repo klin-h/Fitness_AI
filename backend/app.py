@@ -564,7 +564,15 @@ def end_session(session_id):
         session_obj.status = 'completed'
         
         # 计算时长
-        duration_seconds = (session_obj.end_time - session_obj.start_time).total_seconds()
+        # 优先使用前端传入的实际运动时长（扣除了暂停时间），否则使用时间戳差值
+        data = request.get_json() or {}
+        actual_duration_seconds = data.get('duration')
+        
+        if actual_duration_seconds is not None:
+             duration_seconds = float(actual_duration_seconds)
+        else:
+             duration_seconds = (session_obj.end_time - session_obj.start_time).total_seconds()
+
         duration_minutes = int(duration_seconds / 60)
         
         # 对于平板支撑，使用时长而不是次数
@@ -598,6 +606,64 @@ def end_session(session_id):
         
         avg_score = sum([s.get('score', 0) for s in scores]) / len(scores) if scores else 0
         
+        # 计算卡路里消耗 (估算值)
+        # METs (Metabolic Equivalent of Task) 参考值:
+        # 深蹲 (Squats): 5.0
+        # 俯卧撑 (Push-ups): 3.8
+        # 开合跳 (Jumping Jacks): 8.0
+        # 平板支撑 (Plank): 3.5
+        mets_table = {
+            "squat": 5.0,
+            "pushup": 3.8,
+            "jumping_jack": 8.0,
+            "plank": 3.5
+        }
+        met = mets_table.get(session_obj.exercise_type, 4.0)
+        
+        # 尝试获取用户体重，如果获取不到则使用默认值 70kg
+        user_weight = 70.0
+        try:
+            user = get_user_by_id(session_obj.user_id)
+            if user and user.profile and user.profile.weight:
+                user_weight = user.profile.weight
+        except:
+            pass
+            
+        # 卡路里计算公式: Calories = MET * Weight(kg) * Duration(hours)
+        duration_hours = duration_seconds / 3600
+        calories_burned = round(met * user_weight * duration_hours, 1)
+
+        # AI 生成训练总结
+        # 使用 Zhipu AI 生成简短的改进建议
+        # 优化 Prompt 以提高生成速度和质量
+        ai_summary = None
+        try:
+            from app import call_zhipu_ai_api # Import locally to avoid circular dependency
+            
+            # 构建一个更加精简的 Prompt，减少Token输出，提高速度
+            prompt = f"""
+            为用户生成30字以内的健身简评。
+            项目:{session_obj.exercise_type}
+            数据:时长{duration_seconds}s,次数{total_count},准确率{accuracy:.0f}%,均分{avg_score:.1f}
+            包含:肯定+1条改进建议。
+            """
+            
+            # 异步或快速调用 AI (为了不阻塞太久，使用快速模型 glm-4-flash)
+            # 设置 max_tokens 限制输出长度
+            ai_text, error = call_zhipu_ai_api(prompt, max_retries=1)
+            if ai_text:
+                ai_summary = ai_text.strip()
+            else:
+                ai_summary = "训练不错！注意保持动作节奏，期待您下次的表现。"
+                
+        except Exception as e:
+            logger.error(f"AI 生成总结失败: {e}")
+            ai_summary = "训练完成！继续保持，注意休息。"
+
+        # 保存总结数据到数据库
+        session_obj.calories = calories_burned
+        session_obj.ai_comment = ai_summary
+
         try:
             db.session.commit()
             if is_plank:
@@ -614,7 +680,9 @@ def end_session(session_id):
                     "average_score": round(avg_score, 2),
                     "duration": duration_minutes,  # 分钟
                     "duration_seconds": int(duration_seconds) if is_plank else None,  # 平板支撑返回秒数
-                    "exercise_type": session_obj.exercise_type
+                    "exercise_type": session_obj.exercise_type,
+                    "calories": calories_burned,
+                    "ai_comment": ai_summary
                 },
                 "message": "Session ended successfully"
             })

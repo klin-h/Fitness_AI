@@ -1,5 +1,5 @@
 import React from 'react';
-import { Play, Pause, RotateCcw } from 'lucide-react';
+import { Play, Pause, RotateCcw, StopCircle } from 'lucide-react';
 import { ExerciseStats } from '../hooks/usePoseDetection';
 
 interface CameraViewProps {
@@ -9,7 +9,9 @@ interface CameraViewProps {
   exerciseStats: ExerciseStats;
   startDetection: () => Promise<void>;
   stopDetection: () => void;
+  endSession: () => void;
   resetStats: () => void;
+  isLoading?: boolean;
 }
 
 const CameraView: React.FC<CameraViewProps> = ({
@@ -19,7 +21,9 @@ const CameraView: React.FC<CameraViewProps> = ({
   exerciseStats,
   startDetection,
   stopDetection,
-  resetStats
+  endSession,
+  resetStats,
+  isLoading
 }) => {
 
   return (
@@ -72,22 +76,39 @@ const CameraView: React.FC<CameraViewProps> = ({
       </div>
 
       {/* 控制按钮 */}
-      <div className="flex justify-center space-x-4 mt-6">
+      <div className="flex justify-center flex-wrap gap-4 mt-6">
         <button
           onClick={isActive ? stopDetection : startDetection}
+          disabled={isLoading}
           className={`flex items-center space-x-2 px-6 py-3 rounded-lg font-medium transition-all shadow-sm hover:shadow-md ${
             isActive 
-              ? 'bg-red-500 hover:bg-red-600 text-white' 
+              ? 'bg-yellow-500 hover:bg-yellow-600 text-white' 
               : 'bg-blue-600 hover:bg-blue-700 text-white'
-          }`}
+          } ${isLoading ? 'opacity-50 cursor-not-allowed' : ''}`}
         >
           {isActive ? <Pause size={20} /> : <Play size={20} />}
           <span>{isActive ? '暂停检测' : '开始检测'}</span>
         </button>
 
         <button
+          onClick={endSession}
+          disabled={isLoading}
+          className={`flex items-center space-x-2 px-6 py-3 bg-red-600 hover:bg-red-700 text-white rounded-lg font-medium transition-all shadow-sm hover:shadow-md ${
+            isLoading ? 'opacity-50 cursor-not-allowed' : ''
+          }`}
+        >
+          {isLoading ? (
+            <div className="w-5 h-5 border-2 border-white/30 border-t-white rounded-full animate-spin"></div>
+          ) : (
+            <StopCircle size={20} />
+          )}
+          <span>{isLoading ? '生成报告中...' : '结束本次运动'}</span>
+        </button>
+
+        <button
           onClick={resetStats}
-          className="flex items-center space-x-2 px-6 py-3 bg-gray-200 hover:bg-gray-300 text-gray-700 rounded-lg font-medium transition-all shadow-sm hover:shadow-md"
+          disabled={isLoading}
+          className="flex items-center space-x-2 px-6 py-3 bg-gray-200 hover:bg-gray-300 text-gray-700 rounded-lg font-medium transition-all shadow-sm hover:shadow-md disabled:opacity-50 disabled:cursor-not-allowed"
         >
           <RotateCcw size={20} />
           <span>重置数据</span>
