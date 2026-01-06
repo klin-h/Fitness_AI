@@ -60,6 +60,37 @@ def add_columns():
                         print("Adding ai_advice column to plans table (SQLite)...")
                         conn.execute(text("ALTER TABLE plans ADD COLUMN ai_advice TEXT"))
                         print("Column added successfully.")
+
+                # Check and add calories and ai_comment to sessions table
+                print("Checking sessions table...")
+                if 'postgresql' in app.config['SQLALCHEMY_DATABASE_URI'] or 'postgres' in app.config['SQLALCHEMY_DATABASE_URI']:
+                    # calories
+                    result = conn.execute(text("SELECT column_name FROM information_schema.columns WHERE table_name='sessions' AND column_name='calories'"))
+                    if not result.fetchone():
+                        print("Adding calories column to sessions table (PostgreSQL)...")
+                        conn.execute(text("ALTER TABLE sessions ADD COLUMN calories FLOAT DEFAULT 0.0"))
+                        print("Column added successfully.")
+
+                    # ai_comment
+                    result = conn.execute(text("SELECT column_name FROM information_schema.columns WHERE table_name='sessions' AND column_name='ai_comment'"))
+                    if not result.fetchone():
+                        print("Adding ai_comment column to sessions table (PostgreSQL)...")
+                        conn.execute(text("ALTER TABLE sessions ADD COLUMN ai_comment TEXT"))
+                        print("Column added successfully.")
+                else:
+                     # SQLite
+                    result = conn.execute(text("PRAGMA table_info(sessions)"))
+                    columns = [row[1] for row in result.fetchall()]
+                    
+                    if 'calories' not in columns:
+                        print("Adding calories column to sessions table (SQLite)...")
+                        conn.execute(text("ALTER TABLE sessions ADD COLUMN calories FLOAT DEFAULT 0.0"))
+                        print("Column added successfully.")
+                    
+                    if 'ai_comment' not in columns:
+                        print("Adding ai_comment column to sessions table (SQLite)...")
+                        conn.execute(text("ALTER TABLE sessions ADD COLUMN ai_comment TEXT"))
+                        print("Column added successfully.")
                 
                 conn.commit()
                 print("Database migration completed.")
