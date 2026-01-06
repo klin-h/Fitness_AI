@@ -50,6 +50,29 @@ function Home() {
     resetStats
   } = usePoseDetection(selectedExercise);
 
+  // 每日统计数据
+  const [dailyStats, setDailyStats] = useState<{
+    squat: number;
+    pushup: number;
+    jumping_jack: number;
+    plank: number;
+  }>({ squat: 0, pushup: 0, jumping_jack: 0, plank: 0 });
+
+  // 加载每日统计
+  const loadDailyStats = async () => {
+    if (!user || !token) return;
+    try {
+      const stats = await api.get('/api/user/daily_stats', token);
+      setDailyStats(stats);
+    } catch (err) {
+      console.error('加载每日统计失败:', err);
+    }
+  };
+
+  useEffect(() => {
+    loadDailyStats();
+  }, [user, token, sessionId]); // 每次会话结束（sessionId变为null）或初始化时刷新
+
   // 包装 startDetection 以添加会话创建
   const handleStartDetection = async () => {
     await startDetection();
@@ -93,10 +116,19 @@ function Home() {
     // 结束运动会话
     if (sessionId && token) {
       try {
+        // 计算前端的准确率
+        const accuracy = exerciseStats.totalCount && exerciseStats.totalCount > 0 
+           ? Math.round((exerciseStats.correctCount || 0) / exerciseStats.totalCount * 100) 
+           : 0;
+
         const response = await api.post(
           `/api/session/${sessionId}/end`,
           {
-            duration: duration // 发送前端计算的实际运动时长(秒)
+            duration: duration, // 发送前端计算的实际运动时长(秒)
+            stats: {            // 发送前端统计的准确数据
+                total_count: exerciseStats.count,         
+                accuracy: accuracy
+            }
           },
           token
         );
@@ -496,7 +528,8 @@ function Home() {
                   
                   if (isPlank) {
                     // 平板支撑：显示时长（秒）
-                    currentValue = duration; // 当前运动时长（秒）
+                    // 历史累计 + 当前会话时长
+                    currentValue = (dailyStats?.plank || 0) + duration;
                     if (userPlan?.daily_goals?.plank) {
                       targetValue = userPlan.daily_goals.plank; // 目标秒数
                     } else {
@@ -504,7 +537,10 @@ function Home() {
                     }
                   } else {
                     // 其他运动：显示次数
-                    currentValue = exerciseStats.count;
+                    // 历史累计 + 当前会话次数
+                    const dailyCount = dailyStats?.[selectedExercise as keyof typeof dailyStats] || 0;
+                    currentValue = dailyCount + exerciseStats.count;
+                    
                     if (userPlan?.daily_goals) {
                       switch (selectedExercise) {
                         case 'squat':

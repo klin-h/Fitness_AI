@@ -230,6 +230,8 @@ const Profile: React.FC = () => {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []); // 只在组件挂载时执行一次
 
+  const [selectedDate, setSelectedDate] = useState<string>(new Date().toISOString().split('T')[0]);
+
   // 加载历史记录（只在切换到history标签时加载）
   useEffect(() => {
     const loadHistory = async () => {
@@ -237,7 +239,10 @@ const Profile: React.FC = () => {
       
       setHistoryLoading(true);
       try {
-        const response = await api.get(`/api/user/${user.user_id}/history?limit=50`, token);
+        // 请求参数增加日期筛选，或者获取更多记录并在前端筛选
+        // 为了简化，这里我们暂时获取最近100条，然后在前端按日期过滤
+        // 也可以修改后端API支持 start_date/end_date 参数
+        const response = await api.get(`/api/user/${user.user_id}/history?limit=100`, token);
         setHistoryRecords(response.sessions || []);
       } catch (err: any) {
         console.error('加载历史记录失败:', err);
@@ -252,6 +257,13 @@ const Profile: React.FC = () => {
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [activeTab]); // 只在activeTab变化时执行，移除user和token依赖
+
+  // 根据选择的日期筛选历史记录
+  const filteredHistoryRecords = historyRecords.filter(record => {
+    if (!record.start_time) return false;
+    const recordDate = new Date(record.start_time).toISOString().split('T')[0];
+    return recordDate === selectedDate;
+  });
 
   // 加载健身计划（只在切换到plan标签时加载）
   useEffect(() => {
@@ -824,20 +836,35 @@ const Profile: React.FC = () => {
           {/* 历史记录标签页 */}
           {activeTab === 'history' && (
             <div className="space-y-4">
+               {/* 日期选择器 */}
+               <div className="flex items-center space-x-4 bg-white p-4 rounded-lg shadow-sm mb-4">
+                  <label htmlFor="history-date" className="font-medium text-gray-700">选择日期:</label>
+                  <input 
+                    type="date" 
+                    id="history-date" 
+                    value={selectedDate}
+                    onChange={(e) => setSelectedDate(e.target.value)}
+                    className="border border-gray-300 rounded-md px-3 py-2 text-gray-700 focus:outline-none focus:ring-2 focus:ring-blue-500"
+                  />
+                  <div className="text-sm text-gray-500 ml-auto">
+                    共找到 {filteredHistoryRecords.length} 条记录
+                  </div>
+               </div>
+
               {historyLoading ? (
                 <div className="flex items-center justify-center py-12">
                   <div className="w-8 h-8 border-4 border-blue-200 border-t-blue-600 rounded-full animate-spin"></div>
                   <span className="ml-3 text-gray-600">加载中...</span>
                 </div>
-              ) : historyRecords.length === 0 ? (
+              ) : filteredHistoryRecords.length === 0 ? (
                 <div className="text-center py-12">
                   <History className="h-16 w-16 text-gray-300 mx-auto mb-4" />
-                  <p className="text-gray-500 text-lg">暂无历史记录</p>
-                  <p className="text-gray-400 text-sm mt-2">开始运动后，您的记录将显示在这里</p>
+                  <p className="text-gray-500 text-lg">该日期暂无历史记录</p>
+                  <p className="text-gray-400 text-sm mt-2">请尝试选择其他日期</p>
                 </div>
               ) : (
                 <div className="space-y-4">
-                  {historyRecords.map((record, index) => {
+                  {filteredHistoryRecords.map((record, index) => {
                     const startTime = new Date(record.start_time);
                     const endTime = record.end_time ? new Date(record.end_time) : null;
                     const duration = endTime 

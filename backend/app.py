@@ -563,33 +563,58 @@ def end_session(session_id):
         session_obj.end_time = datetime.now()
         session_obj.status = 'completed'
         
+        # 获取前端传入的数据
+        data = request.get_json() or {}
+        
         # 计算时长
         # 优先使用前端传入的实际运动时长（扣除了暂停时间），否则使用时间戳差值
-        data = request.get_json() or {}
         actual_duration_seconds = data.get('duration')
-        
         if actual_duration_seconds is not None:
              duration_seconds = float(actual_duration_seconds)
         else:
              duration_seconds = (session_obj.end_time - session_obj.start_time).total_seconds()
 
-        duration_minutes = int(duration_seconds / 60)
+        duration_minutes = round(duration_seconds / 60, 1)
         
         # 对于平板支撑，使用时长而不是次数
         is_plank = session_obj.exercise_type == 'plank'
         
+        # 获取前端传入的准确统计数据 (如果存在)
+        frontend_stats = data.get('stats', {})
+        frontend_accuracy = frontend_stats.get('accuracy')
+        frontend_count = frontend_stats.get('total_count')
+
         if is_plank:
             # 平板支撑：使用时长（秒）作为主要指标
             total_count = int(duration_seconds)  # 秒数
-            correct_count = int(duration_seconds)  # 平板支撑没有"正确次数"的概念，使用总时长
-            accuracy = 100  # 平板支撑的准确率基于姿势质量，这里简化处理
+            correct_count = int(duration_seconds)
+            accuracy = 100 
         else:
-            # 其他运动：使用次数
-            total_count = session_obj.total_count or 0
-            correct_count = session_obj.correct_count or 0
-            # 确保准确率不超过100%，并且correct_count不超过total_count
-            correct_count = min(correct_count, total_count)  # 防止correct_count超过total_count
-            accuracy = min(100, (correct_count / total_count * 100) if total_count > 0 else 0)
+            # 其他运动：
+            # 如果前端传了 accurate stats，直接使用，解决前后端不一致问题
+            if frontend_count is not None:
+                # 更新数据库里的记录，以防后端计数漏了
+                session_obj.total_count = frontend_count
+                total_count = frontend_count
+                
+                # 如果前端也没传 correct_count (目前没传)，我们可能只能估算或信赖后端
+                # 但 accuracy 前端传了，我们这里主要为了Report显示一致
+                if frontend_accuracy is not None:
+                     accuracy = float(frontend_accuracy)
+                     # 反推 correct_count 用于存储?
+                     correct_count = int(total_count * (accuracy / 100))
+                     session_obj.correct_count = correct_count
+                else:
+                     correct_count = session_obj.correct_count or 0
+                     accuracy = min(100, (correct_count / total_count * 100) if total_count > 0 else 0)
+            else:
+                # Fallback to backend data
+                total_count = session_obj.total_count or 0
+                correct_count = session_obj.correct_count or 0
+                correct_count = min(correct_count, total_count)
+                accuracy = min(100, (correct_count / total_count * 100) if total_count > 0 else 0)
+        
+        # 安全地解析分数记录
         
         # 安全地解析分数记录
         scores = []
@@ -2771,6 +2796,54 @@ def validate_challenge_completion(user_id, challenge_id, challenge_data):
         return all_completed, exercise_counts, targets
     
     return False, 0, 0
+
+@app.route('/api/user/daily_stats', methods=['GET', 'OPTIONS'])
+@require_auth
+def get_daily_stats():
+    """
+    获取用户今日各项目的累计完成数据（次数或时长）
+    用于前端显示“今日目标进度”
+    """
+    try:
+        user_id = request.user_id
+        today = datetime.now().date()
+        today_start = datetime.combine(today, datetime.min.time())
+        today_end = datetime.combine(today, datetime.max.time())
+        
+        # 查询今天的会话
+        today_sessions = Session.query.filter(
+            Session.user_id == user_id,
+            Session.status == 'completed',
+            Session.start_time >= today_start,
+            Session.start_time <= today_end
+        ).all()
+        
+        # 初始化统计
+        stats = {
+            "squat": 0,
+            "pushup": 0,
+            "jumping_jack": 0,
+            "plank": 0 # 秒
+        }
+        
+        for session in today_sessions:
+            ex_type = session.exercise_type
+            if ex_type == 'plank':
+                # 平板支撑：累加时长
+                 # 如果 session.calories (duration) 存在，使用它，否则计算时间差
+                 # 这里我们应该使用数据库里可靠的 duration_seconds 或者从 start/end 计算
+                 # 由于我们没有专门的 duration_seconds 字段（除了临时返回），我们用 timedelta
+                 if session.end_time and session.start_time:
+                     duration = (session.end_time - session.start_time).total_seconds()
+                     stats[ex_type] += int(duration)
+            elif ex_type in stats:
+                stats[ex_type] += (session.total_count or 0)
+                
+        return jsonify(stats)
+        
+    except Exception as e:
+        logger.error(f"❌ 获取今日统计失败: {str(e)}", exc_info=True)
+        return jsonify({"error": "获取数据失败"}), 500
 
 @app.route('/api/challenges/<challenge_id>/complete', methods=['POST', 'OPTIONS'])
 @require_auth
