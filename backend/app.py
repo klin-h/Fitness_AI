@@ -676,13 +676,13 @@ def end_session(session_id):
                 "summary": {
                     "total_count": total_count if not is_plank else int(duration_seconds),  # 平板支撑返回秒数
                     "correct_count": correct_count if not is_plank else int(duration_seconds),
-                    "accuracy": round(accuracy, 2),
-                    "average_score": round(avg_score, 2),
-                    "duration": duration_minutes,  # 分钟
+                    "accuracy": round(accuracy, 2) if accuracy is not None else 0,
+                    "average_score": round(avg_score, 2) if avg_score is not None else 0,
+                    "duration": round(duration_seconds / 60, 1) if duration_seconds is not None else 0,  # 分钟，保留一位小数
                     "duration_seconds": int(duration_seconds) if is_plank else None,  # 平板支撑返回秒数
-                    "exercise_type": session_obj.exercise_type,
-                    "calories": calories_burned,
-                    "ai_comment": ai_summary
+                    "exercise_type": session_obj.exercise_type or '',
+                    "calories": calories_burned if calories_burned is not None else 0,
+                    "ai_comment": ai_summary or "训练完成！继续保持，注意休息。"
                 },
                 "message": "Session ended successfully"
             })
