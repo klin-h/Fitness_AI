@@ -1,4 +1,4 @@
-const API_BASE_URL = 'http://localhost:8000';
+const API_BASE_URL = process.env.REACT_APP_API_URL || 'http://localhost:8000';
 
 export const api = {
   get: async (endpoint: string, token?: string) => {
@@ -16,7 +16,14 @@ export const api = {
     });
 
     if (!response.ok) {
-      const error = await response.json();
+      if (response.status === 401) {
+        localStorage.removeItem('token');
+        localStorage.removeItem('user');
+        if (window.location.pathname !== '/login') {
+          window.location.href = '/login';
+        }
+      }
+      const error = await response.json().catch(() => ({ error: '请求失败' }));
       throw new Error(error.error || '请求失败');
     }
 
@@ -39,8 +46,18 @@ export const api = {
     });
 
     if (!response.ok) {
-      const error = await response.json();
-      throw new Error(error.error || '请求失败');
+      if (response.status === 401) {
+        localStorage.removeItem('token');
+        localStorage.removeItem('user');
+        if (window.location.pathname !== '/login') {
+          window.location.href = '/login';
+        }
+      }
+      const errorData = await response.json().catch(() => ({ error: '请求失败' }));
+      const errorMessage = errorData.details 
+        ? `${errorData.error} (${errorData.details})` 
+        : (errorData.error || '请求失败');
+      throw new Error(errorMessage);
     }
 
     return response.json();
@@ -62,7 +79,14 @@ export const api = {
     });
 
     if (!response.ok) {
-      const error = await response.json();
+      if (response.status === 401) {
+        localStorage.removeItem('token');
+        localStorage.removeItem('user');
+        if (window.location.pathname !== '/login') {
+          window.location.href = '/login';
+        }
+      }
+      const error = await response.json().catch(() => ({ error: '请求失败' }));
       throw new Error(error.error || '请求失败');
     }
 

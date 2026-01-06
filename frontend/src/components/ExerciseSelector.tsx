@@ -22,7 +22,7 @@ const exercises: Exercise[] = [
     name: '深蹲',
     description: '训练大腿和臀部肌肉的经典动作',
     difficulty: 'easy',
-    videoUrl: 'https://www.youtube.com/watch?v=example1',
+    videoUrl: 'https://www.bilibili.com/video/BV1Rb411w7Hz/?spm_id_from=..search-card.all.click',
     thumbnail: '/api/placeholder/200/150',
     targetMuscles: ['大腿', '臀部', '核心']
   },
@@ -31,7 +31,7 @@ const exercises: Exercise[] = [
     name: '俯卧撑',
     description: '上肢力量训练的基础动作',
     difficulty: 'medium',
-    videoUrl: 'https://www.youtube.com/watch?v=example2',
+    videoUrl: 'https://www.bilibili.com/video/BV1Ra4y177vh/?spm_id_from=..search-card.all.click',
     thumbnail: '/api/placeholder/200/150',
     targetMuscles: ['胸部', '肩部', '三头肌']
   },
@@ -40,7 +40,7 @@ const exercises: Exercise[] = [
     name: '平板支撑',
     description: '核心稳定性训练的金标准',
     difficulty: 'medium',
-    videoUrl: 'https://www.youtube.com/watch?v=example3',
+    videoUrl: 'https://www.bilibili.com/video/BV1Pq4y117uA/?spm_id_from=..search-card.all.click',
     thumbnail: '/api/placeholder/200/150',
     targetMuscles: ['核心', '肩部', '背部']
   },
@@ -49,7 +49,7 @@ const exercises: Exercise[] = [
     name: '开合跳',
     description: '全身有氧运动，提高心率',
     difficulty: 'easy',
-    videoUrl: 'https://www.youtube.com/watch?v=example4',
+    videoUrl: 'https://www.bilibili.com/video/BV1dH4y167Tr/?spm_id_from=..search-card.all.click',
     thumbnail: '/api/placeholder/200/150',
     targetMuscles: ['全身', '心肺']
   }

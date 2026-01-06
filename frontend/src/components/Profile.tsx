@@ -1,8 +1,11 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { useAuth } from '../contexts/AuthContext';
 import { useNavigate, useSearchParams } from 'react-router-dom';
 import { api } from '../services/api';
-import { User, Lock, Mail, UserCircle, Save, LogOut, ArrowLeft, Edit2, History, Target, Sparkles } from 'lucide-react';
+import { User, Lock, Mail, UserCircle, Save, LogOut, ArrowLeft, Edit2, History, Target, Sparkles, BarChart2, Trophy, TrendingUp, Send } from 'lucide-react';
+import DataVisualization from './DataVisualization';
+import AchievementsTab from './AchievementsTab';
+import LeaderboardTab from './LeaderboardTab';
 
 const Profile: React.FC = () => {
   const { user, token, logout, updateUser } = useAuth();
@@ -10,9 +13,9 @@ const Profile: React.FC = () => {
   const [searchParams] = useSearchParams();
   
   // 从URL参数获取初始标签页
-  const tabFromUrl = searchParams.get('tab') as 'profile' | 'password' | 'history' | 'plan' | null;
-  const [activeTab, setActiveTab] = useState<'profile' | 'password' | 'history' | 'plan'>(
-    tabFromUrl && ['profile', 'password', 'history', 'plan'].includes(tabFromUrl) ? tabFromUrl : 'profile'
+  const tabFromUrl = searchParams.get('tab') as 'profile' | 'password' | 'history' | 'plan' | 'stats' | 'achievements' | 'leaderboard' | null;
+  const [activeTab, setActiveTab] = useState<'profile' | 'password' | 'history' | 'plan' | 'stats' | 'achievements' | 'leaderboard'>(
+    tabFromUrl && ['profile', 'password', 'history', 'plan', 'stats', 'achievements', 'leaderboard'].includes(tabFromUrl) ? tabFromUrl : 'profile'
   );
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
@@ -27,7 +30,10 @@ const Profile: React.FC = () => {
   const [aiLoading, setAiLoading] = useState(false);
   const [aiSuggestions, setAiSuggestions] = useState<string[]>([]);
   const [aiReasoning, setAiReasoning] = useState('');
+  const [aiAdvice, setAiAdvice] = useState('');
   const [showAiResult, setShowAiResult] = useState(false);
+  const [aiResponse, setAiResponse] = useState<any>(null);
+  const [customGoal, setCustomGoal] = useState('');
   const [dailyGoals, setDailyGoals] = useState({
     squat: 20,
     pushup: 15,
@@ -39,11 +45,107 @@ const Profile: React.FC = () => {
     total_duration: 150
   });
 
+  // AI聊天相关
+  const [chatInput, setChatInput] = useState('');
+  const [chatHistory, setChatHistory] = useState<{role: string, content: string}[]>([]);
+  const [chatLoading, setChatLoading] = useState(false);
+  const chatEndRef = useRef<HTMLDivElement>(null);
+
+  // 滚动到最新消息
+  useEffect(() => {
+    const chatContainer = document.getElementById('chat-container');
+    if (chatContainer) {
+      chatContainer.scrollTop = chatContainer.scrollHeight;
+    }
+  }, [chatHistory, chatLoading]);
+
+  // 简单的Markdown格式化函数
+  const formatMessage = (content: string) => {
+    return content.split('\n').map((line, i) => {
+      // 处理列表项
+      const isListItem = line.trim().startsWith('- ') || line.trim().startsWith('* ');
+      const cleanLine = isListItem ? line.trim().substring(2) : line;
+      
+      // 处理加粗 **text**
+      const parts = cleanLine.split(/(\*\*.*?\*\*)/g);
+      const formattedLine = parts.map((part, j) => {
+        if (part.startsWith('**') && part.endsWith('**')) {
+          return <strong key={j}>{part.slice(2, -2)}</strong>;
+        }
+        return part;
+      });
+
+      if (isListItem) {
+        return (
+          <div key={i} className="flex gap-2 ml-2 my-1">
+            <span className="text-blue-500 font-bold">•</span>
+            <span>{formattedLine}</span>
+          </div>
+        );
+      }
+
+      return (
+        <div key={i} className={`${line.trim() === '' ? 'h-2' : 'min-h-[1.2em]'}`}>
+          {formattedLine}
+        </div>
+      );
+    });
+  };
+
+  const handleSendMessage = async (message?: string) => {
+    const msgToSend = typeof message === 'string' ? message : chatInput;
+    if (!msgToSend.trim()) return;
+    
+    if (!token) {
+      console.error("Token is missing, cannot send message");
+      return;
+    }
+
+    if (!message) setChatInput('');
+    setChatHistory(prev => [...prev, { role: 'user', content: msgToSend }]);
+    setChatLoading(true);
+    
+    try {
+      const response = await api.post('/api/ai/chat', {
+        message: msgToSend,
+        history: chatHistory
+      }, token || undefined);
+      
+      if (response.reply) {
+        setChatHistory(prev => [...prev, { role: 'assistant', content: response.reply }]);
+      }
+    } catch (err: any) {
+      console.error("AI Chat Error:", err);
+      const errorMsg = err.message || '未知错误';
+      setChatHistory(prev => [...prev, { role: 'assistant', content: `(连接错误: ${errorMsg}) 抱歉，请稍后再试。` }]);
+    } finally {
+      setChatLoading(false);
+    }
+  };
+
+  const handleQuickAsk = () => {
+    const profileInfo = [
+      height ? `身高: ${height}cm` : '',
+      weight ? `体重: ${weight}kg` : '',
+      age ? `年龄: ${age}岁` : '',
+      gender ? `性别: ${gender === 'male' ? '男' : gender === 'female' ? '女' : '未知'}` : '',
+      bodyFat ? `体脂率: ${bodyFat}%` : '',
+      customGoal ? `健身目标: ${customGoal}` : '',
+    ].filter(Boolean).join('，');
+
+    const planInfo = `目前的每日计划：深蹲${dailyGoals.squat}次，俯卧撑${dailyGoals.pushup}次，平板支撑${dailyGoals.plank}秒，开合跳${dailyGoals.jumping_jack}次。`;
+
+    const prompt = `你好教练，这是我的身体数据和训练计划：\n${profileInfo}\n${planInfo}\n请根据我的情况，对我的饮食和训练计划给出一些具体的建议。`;
+    
+    handleSendMessage(prompt);
+  };
+
   // 个人资料表单
   const [nickname, setNickname] = useState('');
   const [email, setEmail] = useState('');
   const [height, setHeight] = useState('');
   const [weight, setWeight] = useState('');
+  const [bodyFat, setBodyFat] = useState('');
   const [age, setAge] = useState('');
   const [gender, setGender] = useState('');
 
@@ -54,11 +156,43 @@ const Profile: React.FC = () => {
 
   // 监听URL参数变化
   useEffect(() => {
-    const tabFromUrl = searchParams.get('tab') as 'profile' | 'password' | 'history' | 'plan' | null;
-    if (tabFromUrl && ['profile', 'password', 'history', 'plan'].includes(tabFromUrl)) {
+    const tabFromUrl = searchParams.get('tab') as 'profile' | 'password' | 'history' | 'plan' | 'stats' | 'achievements' | 'leaderboard' | null;
+    if (tabFromUrl && ['profile', 'password', 'history', 'plan', 'stats', 'achievements', 'leaderboard'].includes(tabFromUrl)) {
       setActiveTab(tabFromUrl);
     }
   }, [searchParams]);
+
+  // 成功消息自动消失（2秒后）
+  useEffect(() => {
+    if (success) {
+      const timer = setTimeout(() => {
+        setSuccess('');
+      }, 2000); // 2秒后自动清除
+
+      return () => {
+        clearTimeout(timer); // 清理定时器
+      };
+    }
+  }, [success]);
+
+  // 错误消息自动消失（2秒后）
+  useEffect(() => {
+    if (error) {
+      const timer = setTimeout(() => {
+        setError('');
+      }, 2000); // 2秒后自动清除
+
+      return () => {
+        clearTimeout(timer); // 清理定时器
+      };
+    }
+  }, [error]);
+
+  // 切换面板时清除成功和错误提示
+  useEffect(() => {
+    setSuccess('');
+    setError('');
+  }, [activeTab]);
 
   // 加载用户完整信息（只在组件挂载时执行一次）
   useEffect(() => {
@@ -72,6 +206,7 @@ const Profile: React.FC = () => {
         setEmail(userData.email || '');
         setHeight(userData.profile?.height?.toString() || '');
         setWeight(userData.profile?.weight?.toString() || '');
+        setBodyFat(userData.profile?.body_fat?.toString() || '');
         setAge(userData.profile?.age?.toString() || '');
         setGender(userData.profile?.gender || '');
         // 更新AuthContext中的用户信息
@@ -84,6 +219,7 @@ const Profile: React.FC = () => {
           setEmail(user.email || '');
           setHeight(user.profile?.height?.toString() || '');
           setWeight(user.profile?.weight?.toString() || '');
+          setBodyFat(user.profile?.body_fat?.toString() || '');
           setAge(user.profile?.age?.toString() || '');
           setGender(user.profile?.gender || '');
         }
@@ -101,7 +237,8 @@ const Profile: React.FC = () => {
       
       setHistoryLoading(true);
       try {
-        const response = await api.get(`/api/user/${user.user_id}/history?limit=50`, token);
+        // 获取所有历史记录，增加limit以显示更多
+        const response = await api.get(`/api/user/${user.user_id}/history?limit=1000`, token);
         setHistoryRecords(response.sessions || []);
       } catch (err: any) {
         console.error('加载历史记录失败:', err);
@@ -115,7 +252,10 @@ const Profile: React.FC = () => {
       loadHistory();
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [activeTab]); // 只在activeTab变化时执行，移除user和token依赖
+  }, [activeTab]);
+
+  // 直接使用所有历史记录，不进行日期筛选
+  const filteredHistoryRecords = historyRecords;
 
   // 加载健身计划（只在切换到plan标签时加载）
   useEffect(() => {
@@ -131,6 +271,11 @@ const Profile: React.FC = () => {
         if (plan.weekly_goals) {
           setWeeklyGoals(plan.weekly_goals);
         }
+        if (plan.custom_goal) {
+          setCustomGoal(plan.custom_goal);
+        }
+        // 即使是空字符串也要设置，以便清空之前的建议
+        setAiAdvice(plan.ai_advice || '');
       } catch (err: any) {
         console.error('加载健身计划失败:', err);
         setError('加载健身计划失败');
@@ -146,7 +291,6 @@ const Profile: React.FC = () => {
   }, [activeTab]); // 只在activeTab变化时执行，移除user和token依赖
 
   // AI生成健身计划建议
-  const [aiResponse, setAiResponse] = useState<any>(null);
   
   const handleGenerateAIPlan = async () => {
     setError('');
@@ -161,8 +305,10 @@ const Profile: React.FC = () => {
         {
           height: height ? parseFloat(height) : undefined,
           weight: weight ? parseFloat(weight) : undefined,
+          body_fat: bodyFat ? parseFloat(bodyFat) : undefined,
           age: age ? parseInt(age) : undefined,
-          gender: gender || undefined
+          gender: gender || undefined,
+          custom_goal: customGoal || undefined
         },
         token || undefined
       );
@@ -180,6 +326,15 @@ const Profile: React.FC = () => {
       
       setAiSuggestions(response.suggestions || []);
       setAiReasoning(response.reasoning || '');
+      
+      // 确保ai_advice被设置，即使为空字符串
+      if (response.ai_advice) {
+        setAiAdvice(response.ai_advice);
+      } else {
+        // 如果后端没有返回ai_advice，尝试从ai_response中提取（作为后备）
+        setAiAdvice('');
+      }
+      
       setShowAiResult(false); // 不显示AI建议板块
       
       // 静默应用，不显示成功消息
@@ -204,7 +359,9 @@ const Profile: React.FC = () => {
         '/api/user/plan',
         {
           daily_goals: dailyGoals,
-          weekly_goals: weeklyGoals
+          weekly_goals: weeklyGoals,
+          custom_goal: customGoal,
+          ai_advice: aiAdvice
         },
         token || undefined
       );
@@ -228,6 +385,7 @@ const Profile: React.FC = () => {
       const profileData: any = {};
       if (height) profileData.height = parseFloat(height);
       if (weight) profileData.weight = parseFloat(weight);
+      if (bodyFat) profileData.body_fat = parseFloat(bodyFat);
       if (age) profileData.age = parseInt(age);
       if (gender) profileData.gender = gender;
 
@@ -340,10 +498,10 @@ const Profile: React.FC = () => {
           </div>
 
           {/* 标签页 */}
-          <div className="flex space-x-2 mb-8 border-b border-gray-200">
+          <div className="flex space-x-2 mb-8 border-b border-gray-200 overflow-x-auto">
             <button
               onClick={() => setActiveTab('profile')}
-              className={`px-6 py-3 font-semibold transition-all rounded-t-lg ${
+              className={`px-6 py-3 font-semibold transition-all rounded-t-lg whitespace-nowrap ${
                 activeTab === 'profile'
                   ? 'text-blue-600 bg-blue-50 border-b-2 border-blue-600'
                   : 'text-gray-600 hover:text-blue-600 hover:bg-gray-50'
@@ -354,7 +512,7 @@ const Profile: React.FC = () => {
             </button>
             <button
               onClick={() => setActiveTab('password')}
-              className={`px-6 py-3 font-semibold transition-all rounded-t-lg ${
+              className={`px-6 py-3 font-semibold transition-all rounded-t-lg whitespace-nowrap ${
                 activeTab === 'password'
                   ? 'text-blue-600 bg-blue-50 border-b-2 border-blue-600'
                   : 'text-gray-600 hover:text-blue-600 hover:bg-gray-50'
@@ -366,7 +524,7 @@ const Profile: React.FC = () => {
             <button
               onClick={() => setActiveTab('history')}
               data-tab="history"
-              className={`px-6 py-3 font-semibold transition-all rounded-t-lg ${
+              className={`px-6 py-3 font-semibold transition-all rounded-t-lg whitespace-nowrap ${
                 activeTab === 'history'
                   ? 'text-blue-600 bg-blue-50 border-b-2 border-blue-600'
                   : 'text-gray-600 hover:text-blue-600 hover:bg-gray-50'
@@ -378,7 +536,7 @@ const Profile: React.FC = () => {
             <button
               onClick={() => setActiveTab('plan')}
               data-tab="plan"
-              className={`px-6 py-3 font-semibold transition-all rounded-t-lg ${
+              className={`px-6 py-3 font-semibold transition-all rounded-t-lg whitespace-nowrap ${
                 activeTab === 'plan'
                   ? 'text-blue-600 bg-blue-50 border-b-2 border-blue-600'
                   : 'text-gray-600 hover:text-blue-600 hover:bg-gray-50'
@@ -386,6 +544,42 @@ const Profile: React.FC = () => {
             >
               <Target className="inline h-5 w-5 mr-2" />
               健身计划
+            </button>
+            <button
+              onClick={() => setActiveTab('stats')}
+              data-tab="stats"
+              className={`px-6 py-3 font-semibold transition-all rounded-t-lg whitespace-nowrap ${
+                activeTab === 'stats'
+                  ? 'text-blue-600 bg-blue-50 border-b-2 border-blue-600'
+                  : 'text-gray-600 hover:text-blue-600 hover:bg-gray-50'
+              }`}
+            >
+              <BarChart2 className="inline h-5 w-5 mr-2" />
+              数据统计
+            </button>
+            <button
+              onClick={() => setActiveTab('achievements')}
+              data-tab="achievements"
+              className={`px-6 py-3 font-semibold transition-all rounded-t-lg whitespace-nowrap ${
+                activeTab === 'achievements'
+                  ? 'text-blue-600 bg-blue-50 border-b-2 border-blue-600'
+                  : 'text-gray-600 hover:text-blue-600 hover:bg-gray-50'
+              }`}
+            >
+              <Trophy className="inline h-5 w-5 mr-2" />
+              成就徽章
+            </button>
+            <button
+              onClick={() => setActiveTab('leaderboard')}
+              data-tab="leaderboard"
+              className={`px-6 py-3 font-semibold transition-all rounded-t-lg whitespace-nowrap ${
+                activeTab === 'leaderboard'
+                  ? 'text-blue-600 bg-blue-50 border-b-2 border-blue-600'
+                  : 'text-gray-600 hover:text-blue-600 hover:bg-gray-50'
+              }`}
+            >
+              <TrendingUp className="inline h-5 w-5 mr-2" />
+              排行榜
             </button>
           </div>
 
@@ -480,6 +674,21 @@ const Profile: React.FC = () => {
                     className="w-full px-4 py-3.5 bg-white border border-gray-300 rounded-lg text-gray-900 placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500 transition-all"
                     placeholder="请输入体重"
                     min="0"
+                  />
+                </div>
+
+                <div className="space-y-2">
+                  <label className="block text-gray-700 text-sm font-semibold">
+                    体脂率 (%)
+                  </label>
+                  <input
+                    type="number"
+                    value={bodyFat}
+                    onChange={(e) => setBodyFat(e.target.value)}
+                    className="w-full px-4 py-3.5 bg-white border border-gray-300 rounded-lg text-gray-900 placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500 transition-all"
+                    placeholder="请输入体脂率"
+                    min="0"
+                    max="100"
                   />
                 </div>
 
@@ -619,27 +828,36 @@ const Profile: React.FC = () => {
           {/* 历史记录标签页 */}
           {activeTab === 'history' && (
             <div className="space-y-4">
+               <div className="flex items-center justify-between bg-white p-4 rounded-lg shadow-sm mb-4">
+                  <h3 className="font-bold text-gray-700 text-lg">全部训练记录</h3>
+                  <div className="text-sm text-gray-500">
+                    共 {filteredHistoryRecords.length} 条记录
+                  </div>
+               </div>
+
               {historyLoading ? (
                 <div className="flex items-center justify-center py-12">
                   <div className="w-8 h-8 border-4 border-blue-200 border-t-blue-600 rounded-full animate-spin"></div>
                   <span className="ml-3 text-gray-600">加载中...</span>
                 </div>
-              ) : historyRecords.length === 0 ? (
+              ) : filteredHistoryRecords.length === 0 ? (
                 <div className="text-center py-12">
                   <History className="h-16 w-16 text-gray-300 mx-auto mb-4" />
                   <p className="text-gray-500 text-lg">暂无历史记录</p>
-                  <p className="text-gray-400 text-sm mt-2">开始运动后，您的记录将显示在这里</p>
+                  <p className="text-gray-400 text-sm mt-2">快去开始你的第一次训练吧！</p>
                 </div>
               ) : (
                 <div className="space-y-4">
-                  {historyRecords.map((record, index) => {
+                  {filteredHistoryRecords.map((record, index) => {
                     const startTime = new Date(record.start_time);
                     const endTime = record.end_time ? new Date(record.end_time) : null;
                     const duration = endTime 
                       ? Math.floor((endTime.getTime() - startTime.getTime()) / 1000)
                       : null;
+                    // 确保准确率不超过100%，并且correct_count不超过total_count
+                    const correctCount = Math.min(record.correct_count || 0, record.total_count || 0);
                     const accuracy = record.total_count > 0 
-                      ? ((record.correct_count / record.total_count) * 100).toFixed(1)
+                      ? Math.min(100, (correctCount / record.total_count) * 100).toFixed(1)
                       : '0';
                     
                     const exerciseNames: { [key: string]: string } = {
@@ -660,13 +878,7 @@ const Profile: React.FC = () => {
                               {startTime.toLocaleString('zh-CN')}
                             </p>
                           </div>
-                          <span className={`px-3 py-1 rounded-full text-xs font-semibold ${
-                            record.status === 'completed' 
-                              ? 'bg-green-100 text-green-700'
-                              : 'bg-yellow-100 text-yellow-700'
-                          }`}>
-                            {record.status === 'completed' ? '已完成' : '进行中'}
-                          </span>
+                          {/* 移除状态标签显示 */}
                         </div>
                         
                         <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
@@ -701,20 +913,31 @@ const Profile: React.FC = () => {
           {activeTab === 'plan' && (
             <form onSubmit={handleSavePlan} className="space-y-6">
               <div className="bg-gradient-to-r from-blue-50 to-purple-50 border border-blue-200 rounded-lg p-4 mb-6">
-                <div className="flex items-start justify-between">
+                <div className="flex flex-col md:flex-row items-start md:items-center justify-between gap-4">
                   <div className="flex-1">
                     <p className="text-sm text-blue-800 mb-2">
                       💡 设置您的每日和每周健身目标，系统将根据您的计划跟踪进度
                     </p>
-                    <p className="text-xs text-gray-600">
-                      🤖 点击下方"AI生成建议"按钮，让AI根据您的身体指标生成个性化健身计划
-                    </p>
+                    <div className="flex items-center gap-2 mt-3">
+                      <label className="text-sm font-semibold text-gray-700 whitespace-nowrap">健身目标:</label>
+                      <select
+                        value={customGoal}
+                        onChange={(e) => setCustomGoal(e.target.value)}
+                        className="px-3 py-1.5 bg-white border border-gray-300 rounded-md text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+                      >
+                        <option value="">综合健康</option>
+                        <option value="减脂">减脂</option>
+                        <option value="增肌">增肌</option>
+                        <option value="塑形">塑形</option>
+                        <option value="增强体能">增强体能</option>
+                      </select>
+                    </div>
                   </div>
                   <button
                     type="button"
                     onClick={handleGenerateAIPlan}
                     disabled={aiLoading || planLoading}
-                    className="ml-4 flex items-center gap-2 bg-gradient-to-r from-purple-600 to-blue-600 hover:from-purple-700 hover:to-blue-700 text-white font-semibold py-2.5 px-5 rounded-lg transition-all duration-200 disabled:opacity-50 disabled:cursor-not-allowed shadow-sm hover:shadow-md whitespace-nowrap"
+                    className="flex items-center gap-2 bg-gradient-to-r from-purple-600 to-blue-600 hover:from-purple-700 hover:to-blue-700 text-white font-semibold py-2.5 px-5 rounded-lg transition-all duration-200 disabled:opacity-50 disabled:cursor-not-allowed shadow-sm hover:shadow-md whitespace-nowrap"
                   >
                     {aiLoading ? (
                       <>
@@ -825,6 +1048,113 @@ const Profile: React.FC = () => {
                 </div>
               </div>
 
+              {/* AI教练对话 - 实时聊天版 */}
+              <div className="bg-white border border-blue-100 rounded-xl p-6 shadow-sm mb-6">
+                <h3 className="text-xl font-bold text-gray-900 mb-4 flex items-center gap-2">
+                  <div className="bg-blue-100 p-2 rounded-full">
+                    <Sparkles className="h-5 w-5 text-blue-600" />
+                  </div>
+                  AI 教练助手
+                  <span className="text-xs px-2 py-1 rounded-full border bg-green-50 text-green-700 border-green-200">
+                    GLM-4-9B
+                  </span>
+                </h3>
+                
+                <div className="bg-gray-50 rounded-lg border border-gray-100 h-[400px] flex flex-col">
+                  {/* 聊天记录区域 */}
+                  <div className="flex-1 overflow-y-auto p-4 space-y-4" id="chat-container">
+                    {/* 欢迎语 */}
+                    <div className="flex gap-3">
+                      <div className="flex-shrink-0">
+                        <div className="w-8 h-8 bg-gradient-to-br from-blue-500 to-purple-600 rounded-full flex items-center justify-center text-white font-bold shadow-sm text-xs">
+                          AI
+                        </div>
+                      </div>
+                      <div className="bg-white p-3 rounded-2xl rounded-tl-none shadow-sm border border-gray-100 text-gray-700 text-sm">
+                        你好！我是你的专属AI健身教练。关于饮食、运动或健康计划，有什么想问我的吗？
+                      </div>
+                    </div>
+
+                    {/* 动态消息 */}
+                    {chatHistory.map((msg, idx) => (
+                      <div key={idx} className={`flex gap-3 ${msg.role === 'user' ? 'flex-row-reverse' : ''}`}>
+                        <div className="flex-shrink-0">
+                          <div className={`w-8 h-8 rounded-full flex items-center justify-center text-white font-bold shadow-sm text-xs ${
+                            msg.role === 'user' ? 'bg-gray-700' : 'bg-gradient-to-br from-blue-500 to-purple-600'
+                          }`}>
+                            {msg.role === 'user' ? 'ME' : 'AI'}
+                          </div>
+                        </div>
+                        <div className={`p-3 rounded-2xl shadow-sm border text-sm max-w-[80%] ${
+                          msg.role === 'user' 
+                            ? 'bg-blue-600 text-white rounded-tr-none border-blue-600' 
+                            : 'bg-white text-gray-700 rounded-tl-none border-gray-100'
+                        }`}>
+                          {msg.role === 'user' ? msg.content : formatMessage(msg.content)}
+                        </div>
+                      </div>
+                    ))}
+                    
+                    {/* 加载状态 */}
+                    {chatLoading && (
+                      <div className="flex gap-3">
+                        <div className="flex-shrink-0">
+                          <div className="w-8 h-8 bg-gradient-to-br from-blue-500 to-purple-600 rounded-full flex items-center justify-center text-white font-bold shadow-sm text-xs">
+                            AI
+                          </div>
+                        </div>
+                        <div className="bg-white p-3 rounded-2xl rounded-tl-none shadow-sm border border-gray-100 text-gray-500 text-sm flex items-center gap-2">
+                          <div className="w-2 h-2 bg-gray-400 rounded-full animate-bounce"></div>
+                          <div className="w-2 h-2 bg-gray-400 rounded-full animate-bounce delay-75"></div>
+                          <div className="w-2 h-2 bg-gray-400 rounded-full animate-bounce delay-150"></div>
+                        </div>
+                      </div>
+                    )}
+                  </div>
+
+                  {/* 输入区域 */}
+                  <div className="p-3 border-t border-gray-200 bg-white rounded-b-lg">
+                    {/* 快捷操作栏 */}
+                    <div className="flex gap-2 mb-2 overflow-x-auto pb-1">
+                      <button
+                        type="button"
+                        onClick={handleQuickAsk}
+                        disabled={chatLoading}
+                        className="flex items-center gap-1.5 px-3 py-1.5 bg-blue-50 text-blue-600 rounded-full text-xs font-medium hover:bg-blue-100 transition-colors whitespace-nowrap border border-blue-100"
+                      >
+                        <Sparkles className="h-3 w-3" />
+                        一键生成个性化建议
+                      </button>
+                    </div>
+                    
+                    <div className="flex gap-2">
+                      <input
+                        type="text"
+                        value={chatInput}
+                        onChange={(e) => setChatInput(e.target.value)}
+                        onKeyDown={(e) => {
+                          if (e.key === 'Enter') {
+                            e.preventDefault();
+                            handleSendMessage();
+                          }
+                        }}
+                        placeholder="问问教练怎么吃、怎么练..."
+                        className="flex-1 px-4 py-2 bg-gray-50 border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 focus:bg-white transition-all text-sm"
+                        disabled={chatLoading}
+                      />
+                      <button
+                        type="button"
+                        onClick={() => handleSendMessage()}
+                        disabled={chatLoading || !chatInput.trim()}
+                        className="bg-blue-600 hover:bg-blue-700 text-white px-4 py-2 rounded-lg transition-colors disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center"
+                      >
+                        <Send className="h-4 w-4" />
+                      </button>
+                    </div>
+                  </div>
+                </div>
+              </div>
+
               <button
                 type="submit"
                 disabled={planLoading}
@@ -844,6 +1174,21 @@ const Profile: React.FC = () => {
               </button>
             </form>
           )}
+
+          {/* 数据可视化标签页 */}
+          {activeTab === 'stats' && (
+            <DataVisualization />
+          )}
+
+          {/* 成就徽章标签页 */}
+          {activeTab === 'achievements' && (
+            <AchievementsTab token={token || null} />
+          )}
+
+          {/* 排行榜标签页 */}
+          {activeTab === 'leaderboard' && (
+            <LeaderboardTab />
+          )}
         </div>
       </main>
     </div>
@@ -851,4 +1196,3 @@ const Profile: React.FC = () => {
 };
 
 export default Profile;
-

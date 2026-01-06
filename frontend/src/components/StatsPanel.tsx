@@ -7,15 +7,22 @@ interface StatsPanelProps {
     isCorrect: boolean;
     feedback: string;
     score: number;
+    correctCount?: number;
+    totalCount?: number;
   };
   currentExercise: string;
   duration: number;
+  dailyGoal?: {
+    current: number;
+    target: number;
+  };
 }
 
 const StatsPanel: React.FC<StatsPanelProps> = ({ 
   exerciseStats, 
   currentExercise,
-  duration 
+  duration,
+  dailyGoal
 }) => {
   const formatTime = (seconds: number) => {
     const mins = Math.floor(seconds / 60);
@@ -35,14 +42,32 @@ const StatsPanel: React.FC<StatsPanelProps> = ({
         </div>
       </div>
 
-      {/* 统计数据网格 */}
+      {/* 进度条 - 现在使用传入的dailyGoal显示真正的今日目标进度 */}
+      {dailyGoal && (
+        <div className="space-y-3 mt-4"> {/* Added mt-4 for spacing */}
+          <div className="flex justify-between text-gray-700 text-sm font-medium">
+             <span>今日目标进度</span>
+             <span>{dailyGoal.current}/{dailyGoal.target}</span>
+          </div>
+          <div className="w-full bg-blue-100 rounded-full h-3">
+            <div 
+              className="bg-blue-600 h-3 rounded-full transition-all duration-300"
+              style={{ width: `${Math.min((dailyGoal.current / dailyGoal.target) * 100, 100)}%` }}
+            ></div>
+          </div>
+        </div>
+      )}
+
+      {/* 统计数据网格 - Moved below daily goal progress */}
       <div className="grid grid-cols-2 gap-4">
         {/* 计数 */}
         <div className="bg-blue-50 rounded-lg p-4 text-center border border-blue-100">
           <div className="flex items-center justify-center mb-2">
             <Target className="text-blue-600" size={24} />
           </div>
-          <div className="text-3xl font-bold text-gray-900 mb-1">{exerciseStats.count}</div>
+          <div className="text-3xl font-bold text-gray-900 mb-1">
+            {currentExercise === '平板支撑' ? '-' : exerciseStats.count}
+          </div>
           <div className="text-sm text-gray-600">完成次数</div>
         </div>
 
@@ -52,7 +77,7 @@ const StatsPanel: React.FC<StatsPanelProps> = ({
             <Trophy className="text-blue-600" size={24} />
           </div>
           <div className="text-3xl font-bold text-gray-900 mb-1">{exerciseStats.score}</div>
-          <div className="text-sm text-gray-600">总分数</div>
+          <div className="text-sm text-gray-600">实时分数</div>
         </div>
 
         {/* 时间 */}
@@ -70,27 +95,18 @@ const StatsPanel: React.FC<StatsPanelProps> = ({
             <TrendingUp className="text-blue-600" size={24} />
           </div>
           <div className="text-3xl font-bold text-gray-900 mb-1">
-            {exerciseStats.count > 0 ? Math.round((exerciseStats.score / (exerciseStats.count * 10)) * 100) : 0}%
+            {exerciseStats.totalCount && exerciseStats.totalCount > 0 
+              ? Math.min(100, Math.round((exerciseStats.correctCount || 0) / exerciseStats.totalCount * 100))
+              : 0}%
           </div>
           <div className="text-sm text-gray-600">准确率</div>
         </div>
       </div>
 
-      {/* 进度条 */}
-      <div className="space-y-3">
-        <div className="text-gray-700 text-sm font-medium">今日目标进度</div>
-        <div className="w-full bg-blue-100 rounded-full h-3">
-          <div 
-            className="bg-blue-600 h-3 rounded-full transition-all duration-300"
-            style={{ width: `${Math.min((exerciseStats.count / 20) * 100, 100)}%` }}
-          ></div>
-        </div>
-        <div className="text-right text-gray-600 text-sm">{exerciseStats.count}/20</div>
-      </div>
+      {/* 进度条逻辑已在上移，这里移除原来的位置 */}
 
       {/* 成就徽章 */}
       <div className="space-y-3">
-        <div className="text-gray-700 text-sm font-medium">成就徽章</div>
         <div className="flex space-x-2">
           {exerciseStats.count >= 5 && (
             <div className="w-8 h-8 bg-yellow-100 border border-yellow-300 rounded-full flex items-center justify-center">
