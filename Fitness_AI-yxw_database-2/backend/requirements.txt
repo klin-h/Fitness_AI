@@ -1,0 +1,16 @@
+Flask==3.0.0
+flask-cors==4.0.0
+Flask-SQLAlchemy==3.1.1
+psycopg2-binary==2.9.9
+numpy==1.24.3
+opencv-python==4.8.1.78
+mediapipe==0.10.5
+tensorflow==2.13.0
+scipy==1.10.1
+pandas==2.0.3
+requests==2.31.0
+python-dotenv==1.0.0
+flask-sqlalchemy
+psycopg2-binary
+gunicorn
+torch>=2.0.0 

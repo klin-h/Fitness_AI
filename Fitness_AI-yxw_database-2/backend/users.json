@@ -1,0 +1,32 @@
+{
+  "HXT": {
+    "user_id": "HXT",
+    "username": "HXT",
+    "password_hash": "b75708c2adb15c35bec74aefa3564d810bd042d360e404c7e9953d3d470d9c5e",
+    "email": "3157972067@qq.com",
+    "nickname": "HXT",
+    "created_at": "2025-12-12T17:05:57.032818",
+    "avatar": "",
+    "profile": {
+      "height": 175,
+      "weight": 70,
+      "age": 20,
+      "gender": "male"
+    }
+  },
+  "yxw": {
+    "user_id": "yxw",
+    "username": "yxw",
+    "password_hash": "e833f85cd695b6e5e2b7c9e548584a01c5dbc4d989ac6adee457255468be9c03",
+    "email": "",
+    "nickname": "yxw",
+    "created_at": "2025-12-14T16:54:13.179927",
+    "avatar": "",
+    "profile": {
+      "height": 0,
+      "weight": 0,
+      "age": 0,
+      "gender": ""
+    }
+  }
+}
