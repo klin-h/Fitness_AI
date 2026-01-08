@@ -1,0 +1,106 @@
+{
+  "HXT_20251213_161847": {
+    "session_id": "HXT_20251213_161847",
+    "user_id": "HXT",
+    "exercise_type": "squat",
+    "start_time": "2025-12-13T16:18:47.970554",
+    "end_time": "2025-12-13T16:18:54.218087",
+    "total_count": 1,
+    "correct_count": 1,
+    "scores": [
+      {
+        "timestamp": "2025-12-13T16:18:52.719051",
+        "score": 10,
+        "is_correct": true,
+        "feedback": "很好！已完成 1 次",
+        "pose_data": null
+      }
+    ],
+    "status": "completed"
+  },
+  "HXT_20251213_171853": {
+    "session_id": "HXT_20251213_171853",
+    "user_id": "HXT",
+    "exercise_type": "plank",
+    "start_time": "2025-12-13T17:18:53.933318",
+    "end_time": "2025-12-13T17:19:00.486471",
+    "total_count": 1,
+    "correct_count": 1,
+    "scores": [
+      {
+        "timestamp": "2025-12-13T17:18:58.951486",
+        "score": 10,
+        "is_correct": true,
+        "feedback": "很好！已完成 1 次",
+        "pose_data": null
+      }
+    ],
+    "status": "completed"
+  },
+  "HXT_20251213_175457": {
+    "session_id": "HXT_20251213_175457",
+    "user_id": "HXT",
+    "exercise_type": "plank",
+    "start_time": "2025-12-13T17:54:57.634443",
+    "end_time": "2025-12-13T17:55:04.427853",
+    "total_count": 1,
+    "correct_count": 1,
+    "scores": [
+      {
+        "timestamp": "2025-12-13T17:55:02.384239",
+        "score": 10,
+        "is_correct": true,
+        "feedback": "很好！已完成 1 次",
+        "pose_data": null
+      }
+    ],
+    "status": "completed"
+  },
+  "yxw_20251214_165419": {
+    "session_id": "yxw_20251214_165419",
+    "user_id": "yxw",
+    "exercise_type": "squat",
+    "start_time": "2025-12-14T16:54:19.986486",
+    "end_time": "2025-12-14T16:54:46.004662",
+    "total_count": 5,
+    "correct_count": 5,
+    "scores": [
+      {
+        "timestamp": "2025-12-14T16:54:24.757854",
+        "score": 10,
+        "is_correct": true,
+        "feedback": "很好！已完成 1 次",
+        "pose_data": null
+      },
+      {
+        "timestamp": "2025-12-14T16:54:29.435620",
+        "score": 20,
+        "is_correct": true,
+        "feedback": "很好！已完成 2 次",
+        "pose_data": null
+      },
+      {
+        "timestamp": "2025-12-14T16:54:35.012102",
+        "score": 30,
+        "is_correct": true,
+        "feedback": "很好！已完成 3 次",
+        "pose_data": null
+      },
+      {
+        "timestamp": "2025-12-14T16:54:39.436946",
+        "score": 40,
+        "is_correct": true,
+        "feedback": "很好！已完成 4 次",
+        "pose_data": null
+      },
+      {
+        "timestamp": "2025-12-14T16:54:45.010595",
+        "score": 50,
+        "is_correct": true,
+        "feedback": "很好！已完成 5 次",
+        "pose_data": null
+      }
+    ],
+    "status": "completed"
+  }
+}
